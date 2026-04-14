@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appreciate - サマリー</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Hiragino Sans', sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+      padding: 40px;
+      -webkit-app-region: drag;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      -webkit-app-region: no-drag;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 40px;
+      padding-top: 20px;
+    }
+
+    .logo {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+
+    .event-title {
+      font-size: 18px;
+      color: #a0a0a0;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+
+    .stat-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 48px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .stat-label {
+      font-size: 14px;
+      color: #a0a0a0;
+      margin-top: 8px;
+    }
+
+    .section {
+      margin-bottom: 40px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .emoji-ranking {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .emoji-item {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .emoji-icon {
+      font-size: 32px;
+    }
+
+    .emoji-count {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .messages-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 20px;
+    }
+
+    .message-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .message-emojis {
+      font-size: 24px;
+    }
+
+    .message-sender {
+      font-size: 14px;
+      color: #a0a0a0;
+    }
+
+    .message-text {
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .no-message {
+      color: #666;
+      font-style: italic;
+    }
+
+    .participants-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .participant-badge {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 8px 16px;
+      font-size: 14px;
+    }
+
+    .close-btn {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      font-size: 18px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      -webkit-app-region: no-drag;
+    }
+
+    .close-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <button class="close-btn" onclick="window.close()">×</button>
+
+  <div class="container">
+    <div class="header">
+      <div class="logo">📊</div>
+      <h1>感謝サマリー</h1>
+      <p class="event-title" id="event-title"></p>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-value" id="total-gratitudes">0</div>
+        <div class="stat-label">件の感謝</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="total-emojis">0</div>
+        <div class="stat-label">個の絵文字</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">🏆 絵文字ランキング</h2>
+      <div class="emoji-ranking" id="emoji-ranking"></div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">💬 メッセージ一覧</h2>
+      <div class="messages-list" id="messages-list"></div>
+    </div>
+  </div>
+
+  <script>
+    const eventTitleEl = document.getElementById('event-title');
+    const totalGratitudes = document.getElementById('total-gratitudes');
+    const totalEmojis = document.getElementById('total-emojis');
+    const emojiRanking = document.getElementById('emoji-ranking');
+    const messagesList = document.getElementById('messages-list');
+
+    // Sample data (would be fetched from Firestore in real implementation)
+    const sampleData = {
+      eventTitle: 'チーム定例ミーティング',
+      gratitudes: [
+        { emojis: ['🎉', '👏'], message: '素晴らしい発表でした！', senderName: '田中太郎' },
+        { emojis: ['🙏', '💪'], message: 'とても勉強になりました', senderName: '山田花子' },
+        { emojis: ['❤️'], message: 'いつもありがとうございます！', senderName: '鈴木一郎' },
+        { emojis: ['👍', '🔥'], message: '', senderName: '佐藤次郎' },
+        { emojis: ['🎉'], message: 'お疲れ様でした！', senderName: '高橋三郎' }
+      ]
+    };
+
+    function renderSummary(data) {
+      eventTitleEl.textContent = data.eventTitle;
+      totalGratitudes.textContent = data.gratitudes.length;
+
+      // Count emojis
+      const emojiCounts = {};
+      let totalEmojiCount = 0;
+      data.gratitudes.forEach(g => {
+        g.emojis.forEach(emoji => {
+          emojiCounts[emoji] = (emojiCounts[emoji] || 0) + 1;
+          totalEmojiCount++;
+        });
+      });
+      totalEmojis.textContent = totalEmojiCount;
+
+      // Render emoji ranking
+      const sortedEmojis = Object.entries(emojiCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+
+      emojiRanking.innerHTML = sortedEmojis.map(([emoji, count]) => `
+        <div class="emoji-item">
+          <span class="emoji-icon">${emoji}</span>
+          <span class="emoji-count">×${count}</span>
+        </div>
+      `).join('');
+
+      // Render messages (anonymous)
+      messagesList.innerHTML = data.gratitudes.map(g => `
+        <div class="message-card">
+          <div class="message-header">
+            <span class="message-emojis">${g.emojis.join(' ')}</span>
+          </div>
+          ${g.message ? `<p class="message-text">${g.message}</p>` : '<p class="no-message">メッセージなし</p>'}
+        </div>
+      `).join('');
+    }
+
+    // Listen for summary data
+    window.electronAPI.onLoadSummary((data) => {
+      // In real implementation, fetch from Firestore using data.eventCode
+      renderSummary(sampleData);
+    });
+
+    // Initial render with sample data
+    renderSummary(sampleData);
+  </script>
+</body>
+</html>

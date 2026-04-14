@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Events collection
+    match /events/{eventId} {
+      // Anyone can read events (needed for web participants to verify event codes)
+      allow read: if true;
+      // Only authenticated users can create/update events
+      allow create, update: if request.auth != null;
+      // No one can delete events
+      allow delete: if false;
+    }
+
+    // Gratitudes collection
+    match /gratitudes/{gratitudeId} {
+      // Anyone can create gratitudes (including web anonymous users)
+      allow create: if true;
+      // Only authenticated users can read gratitudes
+      allow read: if request.auth != null;
+      // No one can update or delete gratitudes
+      allow update, delete: if false;
+    }
+  }
+}

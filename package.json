@@ -1,0 +1,49 @@
+{
+  "name": "appreciate-event-organizer",
+  "version": "1.0.0",
+  "description": "イベント感謝収集システム - Google Calendarと連携してイベント終了後に感謝を収集・表示するElectronアプリ",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "deploy-web": "node scripts/deploy-web.js"
+  },
+  "author": "秋山みう",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "electron": "^28.1.3",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.0.1",
+    "dotenv": "^16.3.1",
+    "electron-store": "^8.1.0",
+    "express": "^4.18.2",
+    "firebase": "^10.7.1",
+    "googleapis": "^129.0.0"
+  },
+  "build": {
+    "appId": "com.internal.appreciate",
+    "productName": "Appreciate",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg"
+      ],
+      "icon": "assets/icon.icns"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "src/**/*",
+      "web/**/*",
+      "assets/**/*",
+      "package.json"
+    ]
+  }
+}
