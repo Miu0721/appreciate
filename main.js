@@ -296,9 +296,10 @@ async function startCalendarPolling() {
       const events = response.data.items || [];
 
       for (const event of events) {
-        // Check for #appreciate or #ありがとう tag
+        // Check for title containing "社内イベント" or tags in description
+        const title = event.summary || '';
         const description = event.description || '';
-        if (description.includes('#appreciate') || description.includes('#ありがとう')) {
+        if (title.includes('社内イベント') || description.includes('#appreciate') || description.includes('#ありがとう')) {
           await processAppreciateEvent(event);
         }
       }
@@ -395,6 +396,7 @@ async function processAppreciateEvent(event) {
     organizerEmail: event.organizer?.email || '',
     attendees: (event.attendees || []).map(a => a.email),
     status: 'pending',
+    overlayShown: false,
     createdAt: serverTimestamp()
   };
 
@@ -460,7 +462,63 @@ function showThreeMinuteWarning(eventTitle) {
   notification.show();
 }
 
-// End gratitude collection and show overlay
+// Send Slack DM to organizer with view link
+async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
+  if (!slackClient) {
+    console.log('Slack client not configured, skipping organizer DM');
+    return;
+  }
+
+  const webAppUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
+  const viewUrl = `${webAppUrl}/view.html?code=${eventCode}`;
+
+  try {
+    // Look up organizer by email
+    const userResult = await slackClient.users.lookupByEmail({ email: organizerEmail });
+    if (!userResult.ok || !userResult.user) {
+      console.log(`Slack user not found for organizer email: ${organizerEmail}`);
+      return;
+    }
+
+    const slackUserId = userResult.user.id;
+
+    // Send DM with link to view gratitudes
+    await slackClient.chat.postMessage({
+      channel: slackUserId,
+      text: `「${eventTitle}」の感謝が届きました！`,
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `🎉 *「${eventTitle}」の感謝収集が完了しました！*\n\n参加者からの感謝が届いています。`
+          }
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: {
+                type: 'plain_text',
+                text: '✨ 感謝を見る',
+                emoji: true
+              },
+              style: 'primary',
+              url: viewUrl
+            }
+          ]
+        }
+      ]
+    });
+
+    console.log(`Slack DM sent to organizer: ${organizerEmail}`);
+  } catch (error) {
+    console.error(`Failed to send Slack DM to organizer ${organizerEmail}:`, error.message);
+  }
+}
+
+// End gratitude collection and notify organizer
 async function endGratitudeCollection(eventCode, eventTitle) {
   try {
     const eventRef = doc(db, 'events', eventCode);
@@ -470,12 +528,74 @@ async function endGratitudeCollection(eventCode, eventTitle) {
   }
 
   // Show overlay with gratitudes
+  showGratitudeOverlay(eventCode, eventTitle);
+
+  // Also send Slack DM as backup
+  const trackedEvent = Array.from(trackedEvents.values()).find(e => e.eventCode === eventCode);
+  if (trackedEvent && trackedEvent.data.organizerEmail) {
+    await sendSlackDMToOrganizer(trackedEvent.data.organizerEmail, eventCode, eventTitle);
+  }
+}
+
+// Show gratitude overlay and mark as shown
+async function showGratitudeOverlay(eventCode, eventTitle) {
   createOverlayWindow();
 
   if (overlayWindow) {
-    overlayWindow.webContents.on('did-finish-load', () => {
+    overlayWindow.webContents.on('did-finish-load', async () => {
       overlayWindow.webContents.send('show-gratitudes', { eventCode, eventTitle });
+
+      // Mark overlay as shown
+      try {
+        const eventRef = doc(db, 'events', eventCode);
+        await setDoc(eventRef, { overlayShown: true }, { merge: true });
+      } catch (error) {
+        console.error('Error updating overlayShown:', error);
+      }
     });
+  }
+}
+
+// Check for pending overlays on app startup
+async function checkPendingOverlays() {
+  try {
+    const user = store.get('user');
+    if (!user || !user.email) {
+      console.log('No user logged in, skipping pending overlay check');
+      return;
+    }
+
+    // Query events that are completed but overlay not shown
+    const eventsQuery = query(
+      collection(db, 'events'),
+      where('organizerEmail', '==', user.email),
+      where('status', '==', 'completed'),
+      where('overlayShown', '==', false)
+    );
+
+    const snapshot = await getDocs(eventsQuery);
+
+    if (snapshot.empty) {
+      console.log('No pending overlays');
+      return;
+    }
+
+    // Show overlay for each pending event (with delay between each)
+    const pendingEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log(`Found ${pendingEvents.length} pending overlay(s)`);
+
+    for (let i = 0; i < pendingEvents.length; i++) {
+      const event = pendingEvents[i];
+
+      // Add delay between overlays if multiple
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+
+      showGratitudeOverlay(event.eventCode, event.title);
+    }
+  } catch (error) {
+    console.error('Error checking pending overlays:', error);
   }
 }
 
@@ -580,7 +700,7 @@ ipcMain.handle('close-overlay', () => {
 });
 
 // App lifecycle
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createMainWindow();
   createTray();
 
@@ -589,6 +709,11 @@ app.whenReady().then(() => {
   if (tokens) {
     oauth2Client.setCredentials(tokens);
     startCalendarPolling();
+
+    // Check for pending overlays (events that ended while app was offline)
+    setTimeout(() => {
+      checkPendingOverlays();
+    }, 3000); // Wait 3 seconds for app to fully initialize
   }
 
   app.on('activate', () => {

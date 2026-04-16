@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appreciate - 感謝を見る</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎉</text></svg>">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Hiragino Sans', sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+      padding-top: 20px;
+    }
+
+    .logo {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .event-title {
+      font-size: 18px;
+      color: #a0a0a0;
+      margin-bottom: 8px;
+    }
+
+    .gratitude-count {
+      font-size: 14px;
+      color: #666;
+    }
+
+    /* Loading */
+    .loading {
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #f093fb;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Error */
+    .error-screen {
+      display: none;
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .error-screen.show {
+      display: block;
+    }
+
+    .error-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+    }
+
+    .error-text {
+      font-size: 18px;
+      color: #a0a0a0;
+    }
+
+    /* No gratitudes */
+    .empty-screen {
+      display: none;
+      text-align: center;
+      padding: 60px 20px;
+    }
+
+    .empty-screen.show {
+      display: block;
+    }
+
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+    }
+
+    .empty-text {
+      font-size: 18px;
+      color: #a0a0a0;
+    }
+
+    /* Gratitudes list */
+    .gratitudes-container {
+      display: none;
+    }
+
+    .gratitudes-container.show {
+      display: block;
+    }
+
+    .gratitude-card {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+      opacity: 0;
+      transform: translateY(20px);
+      animation: fadeInUp 0.5s ease forwards;
+    }
+
+    .gratitude-card:nth-child(1) { animation-delay: 0.1s; }
+    .gratitude-card:nth-child(2) { animation-delay: 0.2s; }
+    .gratitude-card:nth-child(3) { animation-delay: 0.3s; }
+    .gratitude-card:nth-child(4) { animation-delay: 0.4s; }
+    .gratitude-card:nth-child(5) { animation-delay: 0.5s; }
+    .gratitude-card:nth-child(6) { animation-delay: 0.6s; }
+    .gratitude-card:nth-child(7) { animation-delay: 0.7s; }
+    .gratitude-card:nth-child(8) { animation-delay: 0.8s; }
+    .gratitude-card:nth-child(9) { animation-delay: 0.9s; }
+    .gratitude-card:nth-child(10) { animation-delay: 1.0s; }
+
+    @keyframes fadeInUp {
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .gratitude-emojis {
+      font-size: 32px;
+      margin-bottom: 12px;
+      letter-spacing: 4px;
+    }
+
+    .gratitude-message {
+      font-size: 16px;
+      line-height: 1.6;
+      color: #e0e0e0;
+    }
+
+    .gratitude-meta {
+      margin-top: 12px;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .gratitude-sender {
+      color: #f093fb;
+    }
+
+    /* Summary stats */
+    .stats-container {
+      display: none;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .stats-container.show {
+      display: block;
+    }
+
+    .stats-title {
+      font-size: 14px;
+      color: #a0a0a0;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    .emoji-stats {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .emoji-stat {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 8px 14px;
+      border-radius: 20px;
+    }
+
+    .emoji-stat-emoji {
+      font-size: 20px;
+    }
+
+    .emoji-stat-count {
+      font-size: 14px;
+      font-weight: 600;
+      color: #f093fb;
+    }
+
+    /* Fullscreen mode toggle */
+    .fullscreen-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      border: none;
+      color: #fff;
+      font-size: 20px;
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(240, 147, 251, 0.4);
+      transition: transform 0.2s;
+    }
+
+    .fullscreen-btn:hover {
+      transform: scale(1.1);
+    }
+
+    /* Fullscreen overlay mode */
+    .overlay-mode {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.9);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .overlay-mode.show {
+      display: flex;
+    }
+
+    .overlay-content {
+      text-align: center;
+      padding: 40px;
+      max-width: 90vw;
+    }
+
+    .overlay-emojis {
+      font-size: 80px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+
+    .overlay-message {
+      font-size: 28px;
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .overlay-sender {
+      font-size: 16px;
+      color: #f093fb;
+    }
+
+    .overlay-progress {
+      position: absolute;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      color: #666;
+    }
+
+    .overlay-close {
+      position: absolute;
+      top: 24px;
+      right: 24px;
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">🎉</div>
+      <h1>Appreciate</h1>
+      <p class="event-title" id="event-title">読み込み中...</p>
+      <p class="gratitude-count" id="gratitude-count"></p>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading" id="loading">
+      <div class="loading-spinner"></div>
+      <p>感謝を読み込み中...</p>
+    </div>
+
+    <!-- Error -->
+    <div class="error-screen" id="error-screen">
+      <div class="error-icon">❌</div>
+      <p class="error-text" id="error-text">イベントが見つかりません</p>
+    </div>
+
+    <!-- Empty -->
+    <div class="empty-screen" id="empty-screen">
+      <div class="empty-icon">📭</div>
+      <p class="empty-text">まだ感謝が届いていません</p>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-container" id="stats-container">
+      <p class="stats-title">受け取った感謝</p>
+      <div class="emoji-stats" id="emoji-stats"></div>
+    </div>
+
+    <!-- Gratitudes -->
+    <div class="gratitudes-container" id="gratitudes-container"></div>
+  </div>
+
+  <!-- Fullscreen button -->
+  <button class="fullscreen-btn" id="fullscreen-btn" style="display: none;">▶</button>
+
+  <!-- Overlay mode -->
+  <div class="overlay-mode" id="overlay-mode">
+    <button class="overlay-close" id="overlay-close">✕</button>
+    <div class="overlay-content">
+      <div class="overlay-emojis" id="overlay-emojis"></div>
+      <p class="overlay-message" id="overlay-message"></p>
+      <p class="overlay-sender" id="overlay-sender"></p>
+    </div>
+    <p class="overlay-progress" id="overlay-progress"></p>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getFirestore, doc, getDoc, collection, query, where, getDocs, orderBy } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+    // Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDZ-1AOlsX-on8pGObY_5Nvgb-rDojvWKQ",
+      authDomain: "appreciate-54692.firebaseapp.com",
+      projectId: "appreciate-54692",
+      storageBucket: "appreciate-54692.appspot.com",
+      messagingSenderId: "485534490091",
+      appId: "1:485534490091:web:1e3c23eacdeb8b12598dae"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Elements
+    const loading = document.getElementById('loading');
+    const errorScreen = document.getElementById('error-screen');
+    const errorText = document.getElementById('error-text');
+    const emptyScreen = document.getElementById('empty-screen');
+    const statsContainer = document.getElementById('stats-container');
+    const emojiStats = document.getElementById('emoji-stats');
+    const gratitudesContainer = document.getElementById('gratitudes-container');
+    const eventTitleEl = document.getElementById('event-title');
+    const gratitudeCountEl = document.getElementById('gratitude-count');
+    const fullscreenBtn = document.getElementById('fullscreen-btn');
+    const overlayMode = document.getElementById('overlay-mode');
+    const overlayClose = document.getElementById('overlay-close');
+    const overlayEmojis = document.getElementById('overlay-emojis');
+    const overlayMessage = document.getElementById('overlay-message');
+    const overlaySender = document.getElementById('overlay-sender');
+    const overlayProgress = document.getElementById('overlay-progress');
+
+    let gratitudes = [];
+    let currentOverlayIndex = 0;
+    let overlayInterval = null;
+
+    // Get event code from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const eventCode = urlParams.get('code');
+
+    if (!eventCode) {
+      showError('イベントコードが指定されていません');
+    } else {
+      loadGratitudes(eventCode);
+    }
+
+    async function loadGratitudes(code) {
+      try {
+        // Get event info
+        const eventDoc = await getDoc(doc(db, 'events', code));
+
+        if (!eventDoc.exists()) {
+          showError('イベントが見つかりません');
+          return;
+        }
+
+        const eventData = eventDoc.data();
+        eventTitleEl.textContent = eventData.title || 'イベント';
+
+        // Get gratitudes
+        const gratitudesQuery = query(
+          collection(db, 'gratitudes'),
+          where('eventCode', '==', code)
+        );
+
+        const snapshot = await getDocs(gratitudesQuery);
+        gratitudes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Sort by createdAt
+        gratitudes.sort((a, b) => {
+          const timeA = a.createdAt?.toMillis() || 0;
+          const timeB = b.createdAt?.toMillis() || 0;
+          return timeB - timeA;
+        });
+
+        loading.style.display = 'none';
+
+        if (gratitudes.length === 0) {
+          emptyScreen.classList.add('show');
+          return;
+        }
+
+        gratitudeCountEl.textContent = `${gratitudes.length}件の感謝が届いています`;
+
+        // Show stats
+        showStats();
+
+        // Show gratitudes
+        showGratitudes();
+
+        // Show fullscreen button
+        fullscreenBtn.style.display = 'block';
+
+      } catch (error) {
+        console.error('Error:', error);
+        showError('データの読み込みに失敗しました');
+      }
+    }
+
+    function showError(message) {
+      loading.style.display = 'none';
+      errorText.textContent = message;
+      errorScreen.classList.add('show');
+    }
+
+    function showStats() {
+      const emojiCount = {};
+
+      gratitudes.forEach(g => {
+        (g.emojis || []).forEach(emoji => {
+          emojiCount[emoji] = (emojiCount[emoji] || 0) + 1;
+        });
+      });
+
+      const sortedEmojis = Object.entries(emojiCount)
+        .sort((a, b) => b[1] - a[1]);
+
+      emojiStats.innerHTML = sortedEmojis.map(([emoji, count]) => `
+        <div class="emoji-stat">
+          <span class="emoji-stat-emoji">${emoji}</span>
+          <span class="emoji-stat-count">${count}</span>
+        </div>
+      `).join('');
+
+      statsContainer.classList.add('show');
+    }
+
+    function showGratitudes() {
+      gratitudesContainer.innerHTML = gratitudes.map(g => {
+        const emojis = (g.emojis || []).join('');
+        const message = g.message || '';
+        const sender = g.slackUserName ? `from ${g.slackUserName}` : '';
+
+        return `
+          <div class="gratitude-card">
+            <div class="gratitude-emojis">${emojis}</div>
+            ${message ? `<p class="gratitude-message">${escapeHtml(message)}</p>` : ''}
+            ${sender ? `<p class="gratitude-meta"><span class="gratitude-sender">${sender}</span></p>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      gratitudesContainer.classList.add('show');
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Fullscreen overlay mode
+    fullscreenBtn.addEventListener('click', () => {
+      currentOverlayIndex = 0;
+      showOverlayItem();
+      overlayMode.classList.add('show');
+      startOverlayAutoPlay();
+    });
+
+    overlayClose.addEventListener('click', () => {
+      overlayMode.classList.remove('show');
+      stopOverlayAutoPlay();
+    });
+
+    overlayMode.addEventListener('click', (e) => {
+      if (e.target === overlayMode) {
+        currentOverlayIndex = (currentOverlayIndex + 1) % gratitudes.length;
+        showOverlayItem();
+      }
+    });
+
+    function showOverlayItem() {
+      const g = gratitudes[currentOverlayIndex];
+      if (!g) return;
+
+      overlayEmojis.textContent = (g.emojis || []).join('');
+      overlayMessage.textContent = g.message || '';
+      overlaySender.textContent = g.slackUserName ? `from ${g.slackUserName}` : '';
+      overlayProgress.textContent = `${currentOverlayIndex + 1} / ${gratitudes.length}`;
+    }
+
+    function startOverlayAutoPlay() {
+      stopOverlayAutoPlay();
+      overlayInterval = setInterval(() => {
+        currentOverlayIndex = (currentOverlayIndex + 1) % gratitudes.length;
+        showOverlayItem();
+      }, 5000);
+    }
+
+    function stopOverlayAutoPlay() {
+      if (overlayInterval) {
+        clearInterval(overlayInterval);
+        overlayInterval = null;
+      }
+    }
+
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {
+      if (!overlayMode.classList.contains('show')) return;
+
+      if (e.key === 'Escape') {
+        overlayMode.classList.remove('show');
+        stopOverlayAutoPlay();
+      } else if (e.key === 'ArrowRight' || e.key === ' ') {
+        currentOverlayIndex = (currentOverlayIndex + 1) % gratitudes.length;
+        showOverlayItem();
+      } else if (e.key === 'ArrowLeft') {
+        currentOverlayIndex = (currentOverlayIndex - 1 + gratitudes.length) % gratitudes.length;
+        showOverlayItem();
+      }
+    });
+  </script>
+</body>
+</html>
