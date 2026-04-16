@@ -361,12 +361,10 @@ async function triggerEventEnd(eventCode, eventTitle) {
     console.error('Error updating event status:', error);
   }
 
-  // Get attendees and send Slack DM
+  // Get attendees and send Slack DM (全員に送信)
   const trackedEvent = Array.from(trackedEvents.values()).find(e => e.eventCode === eventCode);
   if (trackedEvent && trackedEvent.data.attendees) {
-    const attendeeEmails = trackedEvent.data.attendees.filter(email =>
-      email !== trackedEvent.data.organizerEmail
-    );
+    const attendeeEmails = trackedEvent.data.attendees; // 主催者含め全員
     sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle);
   }
 
