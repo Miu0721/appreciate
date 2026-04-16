@@ -49,8 +49,6 @@ const slackClient = process.env.SLACK_BOT_TOKEN
 let mainWindow = null;
 let overlayWindow = null;
 let summaryWindow = null;
-let participantWindow = null;
-let notificationBannerWindow = null;
 let tray = null;
 
 // Calendar polling interval (1 minute)
@@ -140,70 +138,6 @@ function createSummaryWindow() {
   });
 }
 
-// Create participant window for gratitude input
-function createParticipantWindow(eventId, eventTitle) {
-  participantWindow = new BrowserWindow({
-    width: 500,
-    height: 600,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    },
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#1a1a2e'
-  });
-
-  participantWindow.loadFile(path.join(__dirname, 'src', 'windows', 'participant.html'));
-
-  participantWindow.webContents.on('did-finish-load', () => {
-    participantWindow.webContents.send('event-info', { eventId, eventTitle });
-  });
-
-  participantWindow.on('closed', () => {
-    participantWindow = null;
-  });
-}
-
-// Create notification banner window
-function createNotificationBannerWindow(eventTitle, eventId) {
-  const { width } = screen.getPrimaryDisplay().workAreaSize;
-
-  notificationBannerWindow = new BrowserWindow({
-    width: 400,
-    height: 120,
-    x: width - 420,
-    y: 20,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-
-  notificationBannerWindow.loadFile(path.join(__dirname, 'src', 'windows', 'notification-banner.html'));
-
-  notificationBannerWindow.webContents.on('did-finish-load', () => {
-    notificationBannerWindow.webContents.send('notification-data', { eventTitle, eventId });
-  });
-
-  // Auto-close after 10 seconds if not interacted
-  setTimeout(() => {
-    if (notificationBannerWindow && !notificationBannerWindow.isDestroyed()) {
-      notificationBannerWindow.close();
-    }
-  }, 10000);
-
-  notificationBannerWindow.on('closed', () => {
-    notificationBannerWindow = null;
-  });
-}
-
 // Create system tray
 function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray-icon.png');
@@ -248,10 +182,6 @@ function createTray() {
         mainWindow.show();
       }
     },
-    {
-      label: 'テスト通知を送信',
-      click: () => sendTestNotification()
-    },
     { type: 'separator' },
     {
       label: '終了',
@@ -261,11 +191,6 @@ function createTray() {
 
   tray.setToolTip('Appreciate - イベント感謝収集システム');
   tray.setContextMenu(contextMenu);
-}
-
-// Send test notification (TEST0001)
-function sendTestNotification() {
-  createNotificationBannerWindow('テストイベント', 'TEST0001');
 }
 
 // Start calendar polling
@@ -437,9 +362,6 @@ async function triggerEventEnd(eventCode, eventTitle) {
     );
     sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle);
   }
-
-  // Show notification banner (for organizer)
-  createNotificationBannerWindow(eventTitle, eventCode);
 
   // Schedule 3-minute warning (7 minutes after start)
   setTimeout(() => {
@@ -671,16 +593,6 @@ ipcMain.handle('get-event-by-code', async (event, eventCode) => {
     return { success: false, error: 'イベントが見つかりません' };
   } catch (error) {
     return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('open-participant-window', (event, { eventId, eventTitle }) => {
-  createParticipantWindow(eventId, eventTitle);
-});
-
-ipcMain.handle('close-notification-banner', () => {
-  if (notificationBannerWindow && !notificationBannerWindow.isDestroyed()) {
-    notificationBannerWindow.close();
   }
 });
 

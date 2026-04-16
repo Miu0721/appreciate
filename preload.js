@@ -15,15 +15,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   submitGratitude: (data) => ipcRenderer.invoke('submit-gratitude', data),
 
   // Windows
-  openParticipantWindow: (eventId, eventTitle) =>
-    ipcRenderer.invoke('open-participant-window', { eventId, eventTitle }),
-  closeNotificationBanner: () => ipcRenderer.invoke('close-notification-banner'),
   openSummary: (eventCode) => ipcRenderer.invoke('open-summary', eventCode),
   closeOverlay: () => ipcRenderer.invoke('close-overlay'),
 
   // Event listeners
-  onEventInfo: (callback) => ipcRenderer.on('event-info', (event, data) => callback(data)),
-  onNotificationData: (callback) => ipcRenderer.on('notification-data', (event, data) => callback(data)),
   onShowGratitudes: (callback) => ipcRenderer.on('show-gratitudes', (event, data) => callback(data)),
   onLoadSummary: (callback) => ipcRenderer.on('load-summary', (event, data) => callback(data)),
 
