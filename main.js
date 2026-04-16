@@ -184,6 +184,13 @@ function createTray() {
     },
     { type: 'separator' },
     {
+      label: '🧪 オーバーレイテスト (TEST001)',
+      click: () => {
+        showGratitudeOverlay('TEST001', 'テストイベント');
+      }
+    },
+    { type: 'separator' },
+    {
       label: '終了',
       click: () => app.quit()
     }
@@ -615,6 +622,12 @@ ipcMain.handle('close-overlay', () => {
 app.whenReady().then(async () => {
   createMainWindow();
   createTray();
+
+  // テストモード: 起動3秒後にオーバーレイを自動表示
+  setTimeout(() => {
+    console.log('🧪 テストモード: オーバーレイを表示');
+    showGratitudeOverlay('TEST001', '300絵文字テストイベント');
+  }, 3000);
 
   // Check for stored tokens and start polling
   const tokens = store.get('tokens');
