@@ -30,24 +30,64 @@ const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET;
 // 絵文字リスト
 const EMOJI_LIST = ['🙏', '👏', '🎉', '❤️', '💪', '🔥', '✨', '👍', '🌟', '💯'];
 
+// サーバー側状態管理（Race Condition対策）
+const userEmojiState = new Map();
+
+function getStateKey(userId, eventCode) {
+  return `${userId}_${eventCode}`;
+}
+
 // Slack interactions endpoint (must be before express.json middleware)
 app.post('/slack/interactions', express.urlencoded({ extended: true }), async (req, res) => {
   try {
-    console.log('Slack interaction received');
-
     const payload = JSON.parse(req.body.payload);
-    console.log('Payload type:', payload.type);
 
-    // Handle button click - open modal
+    // Handle button click
     if (payload.type === 'block_actions') {
       const action = payload.actions[0];
 
+      // Open gratitude modal from DM
       if (action.action_id === 'open_gratitude_modal') {
         const [eventCode, eventTitle] = action.value.split('|');
+        const key = getStateKey(payload.user.id, eventCode);
+        userEmojiState.set(key, []); // 初期化
 
         await slackClient.views.open({
           trigger_id: payload.trigger_id,
-          view: buildGratitudeModal(eventCode, eventTitle)
+          view: buildGratitudeModal(eventCode, eventTitle, [])
+        });
+
+        return res.status(200).send();
+      }
+
+      // Emoji button clicked - add emoji（連打対応）
+      if (action.action_id.startsWith('emoji_')) {
+        const emoji = action.value;
+        const metadata = JSON.parse(payload.view.private_metadata);
+        const key = getStateKey(payload.user.id, metadata.eventCode);
+
+        // サーバー側で状態管理（Race Condition対策）
+        const currentEmojis = userEmojiState.get(key) || [];
+        currentEmojis.push(emoji);
+        userEmojiState.set(key, currentEmojis);
+
+        await slackClient.views.update({
+          view_id: payload.view.id,
+          view: buildGratitudeModal(metadata.eventCode, metadata.eventTitle, currentEmojis)
+        });
+
+        return res.status(200).send();
+      }
+
+      // Clear emojis
+      if (action.action_id === 'clear_emojis') {
+        const metadata = JSON.parse(payload.view.private_metadata);
+        const key = getStateKey(payload.user.id, metadata.eventCode);
+        userEmojiState.set(key, []);
+
+        await slackClient.views.update({
+          view_id: payload.view.id,
+          view: buildGratitudeModal(metadata.eventCode, metadata.eventTitle, [])
         });
 
         return res.status(200).send();
@@ -58,12 +98,10 @@ app.post('/slack/interactions', express.urlencoded({ extended: true }), async (r
     if (payload.type === 'view_submission' && payload.view.callback_id === 'gratitude_submit') {
       const metadata = JSON.parse(payload.view.private_metadata);
       const values = payload.view.state.values;
+      const key = getStateKey(payload.user.id, metadata.eventCode);
 
-      // Get selected emojis
-      const emojiSelect = values.emoji_section?.emoji_select?.selected_options || [];
-      const emojis = emojiSelect.map(opt => opt.value);
-
-      // Get message
+      // サーバー側の状態から絵文字を取得
+      const emojis = userEmojiState.get(key) || [];
       const message = values.message_block?.message_input?.value || '';
 
       // Validate at least one emoji
@@ -71,23 +109,34 @@ app.post('/slack/interactions', express.urlencoded({ extended: true }), async (r
         return res.json({
           response_action: 'errors',
           errors: {
-            emoji_section: '絵文字を1つ以上選択してください'
+            message_block: '絵文字を1つ以上選択してください'
           }
         });
       }
 
       // Save to Firestore
       const gratitudeId = `${metadata.eventCode}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // 絵文字カウントも計算
+      const emojiCounts = emojis.reduce((acc, e) => {
+        acc[e] = (acc[e] || 0) + 1;
+        return acc;
+      }, {});
+
       await setDoc(doc(db, 'gratitudes', gratitudeId), {
         eventCode: metadata.eventCode,
         emojis,
+        emojiCounts,
         message,
         slackUserId: payload.user.id,
         slackUserName: payload.user.name,
         createdAt: serverTimestamp()
       });
 
-      console.log('Gratitude saved:', gratitudeId);
+      // 状態をクリア
+      userEmojiState.delete(key);
+
+      console.log('Gratitude saved:', gratitudeId, `(${emojis.length}個の絵文字)`);
 
       // Close modal with success message
       return res.json({
@@ -101,7 +150,7 @@ app.post('/slack/interactions', express.urlencoded({ extended: true }), async (r
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: `✅ *感謝を送信しました！*\n\n${emojis.join('')}\n${message || ''}`
+                text: `✅ *感謝を送信しました！*\n\n${emojis.length}個の絵文字: ${emojis.slice(0, 20).join('')}${emojis.length > 20 ? '...' : ''}\n${message || ''}`
               }
             }
           ]
@@ -141,8 +190,91 @@ function verifySlackSignature(req, rawBody) {
   return crypto.timingSafeEqual(Buffer.from(mySignature), Buffer.from(slackSignature));
 }
 
-// Build gratitude modal
-function buildGratitudeModal(eventCode, eventTitle) {
+// Build gratitude modal with tap-to-add emojis（連打対応）
+function buildGratitudeModal(eventCode, eventTitle, emojis = []) {
+  const selectedDisplay = emojis.length > 0
+    ? (emojis.length <= 30 ? emojis.join('') : `${emojis.slice(0, 30).join('')}... (${emojis.length}個)`)
+    : '（タップで追加）';
+
+  const blocks = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*${eventTitle}* への感謝を送りましょう！`
+      }
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: '*絵文字を選択（連打OK！）*'
+      }
+    },
+    {
+      type: 'actions',
+      elements: EMOJI_LIST.slice(0, 5).map((emoji, i) => ({
+        type: 'button',
+        text: { type: 'plain_text', text: emoji, emoji: true },
+        action_id: `emoji_${i}`,
+        value: emoji
+      }))
+    },
+    {
+      type: 'actions',
+      elements: EMOJI_LIST.slice(5, 10).map((emoji, i) => ({
+        type: 'button',
+        text: { type: 'plain_text', text: emoji, emoji: true },
+        action_id: `emoji_${i + 5}`,
+        value: emoji
+      }))
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*選択中 (${emojis.length}個):* ${selectedDisplay}`
+      }
+    }
+  ];
+
+  // Add clear button if emojis selected
+  if (emojis.length > 0) {
+    blocks.push({
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '🗑️ クリア' },
+        action_id: 'clear_emojis',
+        style: 'danger'
+      }]
+    });
+  }
+
+  blocks.push(
+    { type: 'divider' },
+    {
+      type: 'input',
+      block_id: 'message_block',
+      optional: true,
+      element: {
+        type: 'plain_text_input',
+        action_id: 'message_input',
+        multiline: true,
+        max_length: 200,
+        placeholder: {
+          type: 'plain_text',
+          text: 'メッセージを入力（任意・200文字以内）'
+        }
+      },
+      label: {
+        type: 'plain_text',
+        text: 'メッセージ'
+      }
+    }
+  );
+
   return {
     type: 'modal',
     callback_id: 'gratitude_submit',
@@ -159,57 +291,7 @@ function buildGratitudeModal(eventCode, eventTitle) {
       type: 'plain_text',
       text: 'キャンセル'
     },
-    blocks: [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*${eventTitle}* への感謝を送りましょう！`
-        }
-      },
-      {
-        type: 'divider'
-      },
-      {
-        type: 'section',
-        block_id: 'emoji_section',
-        text: {
-          type: 'mrkdwn',
-          text: '*絵文字を選択:*'
-        },
-        accessory: {
-          type: 'multi_static_select',
-          action_id: 'emoji_select',
-          placeholder: {
-            type: 'plain_text',
-            text: '絵文字を選んでください'
-          },
-          options: EMOJI_LIST.map(emoji => ({
-            text: { type: 'plain_text', text: emoji, emoji: true },
-            value: emoji
-          }))
-        }
-      },
-      {
-        type: 'input',
-        block_id: 'message_block',
-        optional: true,
-        element: {
-          type: 'plain_text_input',
-          action_id: 'message_input',
-          multiline: true,
-          max_length: 200,
-          placeholder: {
-            type: 'plain_text',
-            text: 'メッセージを入力（任意・200文字以内）'
-          }
-        },
-        label: {
-          type: 'plain_text',
-          text: 'メッセージ'
-        }
-      }
-    ]
+    blocks
   };
 }
 

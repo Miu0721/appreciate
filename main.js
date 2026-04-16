@@ -621,12 +621,6 @@ app.whenReady().then(async () => {
   createMainWindow();
   createTray();
 
-  // テストモード: 起動3秒後にオーバーレイを自動表示
-  setTimeout(() => {
-    console.log('🧪 テストモード: オーバーレイを表示');
-    showGratitudeOverlay('TEST001', '300絵文字テストイベント');
-  }, 3000);
-
   // Check for stored tokens and start polling
   const tokens = store.get('tokens');
   if (tokens) {
