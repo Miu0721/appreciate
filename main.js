@@ -58,6 +58,43 @@ let pollingTimer = null;
 // Tracked events
 const trackedEvents = new Map();
 
+function getSecureWebPreferences() {
+  return {
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    nodeIntegration: false
+  };
+}
+
+function getTrackedEventByCode(eventCode) {
+  return Array.from(trackedEvents.values()).find(event => event.eventCode === eventCode);
+}
+
+async function updateEventDoc(eventCode, updates) {
+  try {
+    const eventRef = doc(db, 'events', eventCode);
+    await setDoc(eventRef, updates, { merge: true });
+    return true;
+  } catch (error) {
+    console.error(`Error updating event ${eventCode}:`, error);
+    return false;
+  }
+}
+
+async function getSlackUserIdByEmail(email, label) {
+  if (!slackClient) {
+    return null;
+  }
+
+  const userResult = await slackClient.users.lookupByEmail({ email });
+  if (!userResult.ok || !userResult.user) {
+    console.log(`Slack user not found for ${label}: ${email}`);
+    return null;
+  }
+
+  return userResult.user.id;
+}
+
 // Generate event code (6-8 alphanumeric characters)
 function generateEventCode() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -75,11 +112,7 @@ function createMainWindow() {
     width: 400,
     height: 500,
     resizable: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    },
+    webPreferences: getSecureWebPreferences(),
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a2e'
   });
@@ -102,15 +135,11 @@ function createOverlayWindow() {
     transparent: true,
     alwaysOnTop: true,
     skipTaskbar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
+    webPreferences: getSecureWebPreferences()
   });
 
   overlayWindow.loadFile(path.join(__dirname, 'src', 'windows', 'overlay.html'));
-  overlayWindow.setIgnoreMouseEvents(false);
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
@@ -122,11 +151,7 @@ function createSummaryWindow() {
   summaryWindow = new BrowserWindow({
     width: 800,
     height: 600,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    },
+    webPreferences: getSecureWebPreferences(),
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a2e'
   });
@@ -226,12 +251,15 @@ async function startCalendarPolling() {
       });
 
       const events = response.data.items || [];
+      console.log(`[Calendar] Found ${events.length} events`);
 
       for (const event of events) {
         // Check for title containing "社内イベント" or tags in description
         const title = event.summary || '';
         const description = event.description || '';
+        console.log(`[Calendar] Checking event: "${title}"`);
         if (title.includes('社内イベント') || description.includes('#appreciate') || description.includes('#ありがとう')) {
+          console.log(`[Calendar] Matched! Processing: "${title}"`);
           await processAppreciateEvent(event);
         }
       }
@@ -257,14 +285,8 @@ async function sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle) {
 
   for (const email of attendeeEmails) {
     try {
-      // Look up user by email
-      const userResult = await slackClient.users.lookupByEmail({ email });
-      if (!userResult.ok || !userResult.user) {
-        console.log(`Slack user not found for email: ${email}`);
-        continue;
-      }
-
-      const slackUserId = userResult.user.id;
+      const slackUserId = await getSlackUserIdByEmail(email, 'email');
+      if (!slackUserId) continue;
 
       // Send DM with button to open gratitude modal
       await slackClient.chat.postMessage({
@@ -320,8 +342,8 @@ async function processAppreciateEvent(event) {
   const eventCode = generateEventCode();
   const eventData = {
     googleEventId: eventId,
-    title: event.summary,
-    description: event.description,
+    title: event.summary || '',
+    description: event.description || '',
     startTime: Timestamp.fromDate(new Date(event.start.dateTime || event.start.date)),
     endTime: Timestamp.fromDate(endTime),
     eventCode,
@@ -354,15 +376,10 @@ async function processAppreciateEvent(event) {
 // Trigger event end flow
 async function triggerEventEnd(eventCode, eventTitle) {
   // Update event status
-  try {
-    const eventRef = doc(db, 'events', eventCode);
-    await setDoc(eventRef, { status: 'collecting' }, { merge: true });
-  } catch (error) {
-    console.error('Error updating event status:', error);
-  }
+  await updateEventDoc(eventCode, { status: 'collecting' });
 
   // Get attendees and send Slack DM (全員に送信)
-  const trackedEvent = Array.from(trackedEvents.values()).find(e => e.eventCode === eventCode);
+  const trackedEvent = getTrackedEventByCode(eventCode);
   if (trackedEvent && trackedEvent.data.attendees) {
     const attendeeEmails = trackedEvent.data.attendees; // 主催者含め全員
     sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle);
@@ -400,14 +417,8 @@ async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
   const viewUrl = `${webAppUrl}/view.html?code=${eventCode}`;
 
   try {
-    // Look up organizer by email
-    const userResult = await slackClient.users.lookupByEmail({ email: organizerEmail });
-    if (!userResult.ok || !userResult.user) {
-      console.log(`Slack user not found for organizer email: ${organizerEmail}`);
-      return;
-    }
-
-    const slackUserId = userResult.user.id;
+    const slackUserId = await getSlackUserIdByEmail(organizerEmail, 'organizer email');
+    if (!slackUserId) return;
 
     // Send DM with link to view gratitudes
     await slackClient.chat.postMessage({
@@ -447,18 +458,13 @@ async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
 
 // End gratitude collection and notify organizer
 async function endGratitudeCollection(eventCode, eventTitle) {
-  try {
-    const eventRef = doc(db, 'events', eventCode);
-    await setDoc(eventRef, { status: 'completed' }, { merge: true });
-  } catch (error) {
-    console.error('Error updating event status:', error);
-  }
+  await updateEventDoc(eventCode, { status: 'completed' });
 
   // Show overlay with gratitudes
   showGratitudeOverlay(eventCode, eventTitle);
 
   // Also send Slack DM as backup
-  const trackedEvent = Array.from(trackedEvents.values()).find(e => e.eventCode === eventCode);
+  const trackedEvent = getTrackedEventByCode(eventCode);
   if (trackedEvent && trackedEvent.data.organizerEmail) {
     await sendSlackDMToOrganizer(trackedEvent.data.organizerEmail, eventCode, eventTitle);
   }
@@ -473,12 +479,7 @@ async function showGratitudeOverlay(eventCode, eventTitle) {
       overlayWindow.webContents.send('show-gratitudes', { eventCode, eventTitle });
 
       // Mark overlay as shown
-      try {
-        const eventRef = doc(db, 'events', eventCode);
-        await setDoc(eventRef, { overlayShown: true }, { merge: true });
-      } catch (error) {
-        console.error('Error updating overlayShown:', error);
-      }
+      await updateEventDoc(eventCode, { overlayShown: true });
     });
   }
 }

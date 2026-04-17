@@ -271,7 +271,7 @@
 
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
-    import { getFirestore, collection, query, where, getDocs } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+    import { getFirestore, collection, query, where, getDocs, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
 
     // Firebase configuration
     const firebaseConfig = {
@@ -379,9 +379,16 @@
 
       setTimeout(() => card.parentNode && card.remove(), 30000);
 
-      // パーティクル（300個を10秒で表示）
-      const interval = Math.max(33, 10000 / emojis.length); // 最長10秒
-      emojis.forEach((emoji, i) => {
+      // パーティクル（実際の数×3を10秒で表示）
+      const multipliedEmojis = [];
+      emojis.forEach(emoji => {
+        for (let i = 0; i < 3; i++) {
+          multipliedEmojis.push(emoji);
+        }
+      });
+
+      const interval = Math.max(33, 10000 / multipliedEmojis.length); // 最長10秒
+      multipliedEmojis.forEach((emoji, i) => {
         setTimeout(() => createEmojiParticle(emoji), i * interval);
       });
 
@@ -398,7 +405,10 @@
       }
     }
 
-    // Firestoreから取得
+    // 表示済みIDを追跡
+    const displayedIds = new Set();
+
+    // Firestoreから初期データ取得
     async function fetchGratitudes(code) {
       try {
         const q = query(collection(db, 'gratitudes'), where('eventCode', '==', code));
@@ -412,19 +422,48 @@
       }
     }
 
+    // リアルタイム同期を開始
+    function startRealtimeSync(code) {
+      const q = query(collection(db, 'gratitudes'), where('eventCode', '==', code));
+
+      onSnapshot(q, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const gratitude = { id: change.doc.id, ...change.doc.data() };
+
+            // 未表示の新しい感謝のみ表示
+            if (!displayedIds.has(gratitude.id)) {
+              displayedIds.add(gratitude.id);
+              displayGratitude(gratitude);
+              console.log('New gratitude received:', gratitude.id);
+            }
+          }
+        });
+      }, (error) => {
+        console.error('Realtime sync error:', error);
+      });
+    }
+
     // メイン処理
     window.electronAPI.onShowGratitudes(async (data) => {
       eventCode = data.eventCode;
       eventTitleEl.textContent = data.eventTitle;
 
+      // 初期データ取得
       gratitudes = await fetchGratitudes(eventCode);
       console.log(`Loaded ${gratitudes.length} gratitudes`);
 
       if (gratitudes.length === 0) {
-        gratitudes = [{ emojis: ['📭'], message: 'まだ感謝が届いていません', slackUserName: '' }];
+        // データがない場合は待機メッセージを表示
+        gratitudeCountEl.textContent = '感謝を待っています...';
+      } else {
+        // 既存データをストリーム表示
+        gratitudes.forEach(g => displayedIds.add(g.id));
+        streamGratitudes();
       }
 
-      streamGratitudes();
+      // リアルタイム同期を開始（新しい感謝を即座に表示）
+      startRealtimeSync(eventCode);
     });
   </script>
 </body>
