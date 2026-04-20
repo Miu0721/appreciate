@@ -227,18 +227,6 @@
     const emojiRanking = document.getElementById('emoji-ranking');
     const messagesList = document.getElementById('messages-list');
 
-    // Sample data (would be fetched from Firestore in real implementation)
-    const sampleData = {
-      eventTitle: 'チーム定例ミーティング',
-      gratitudes: [
-        { emojis: ['🎉', '👏'], message: '素晴らしい発表でした！', senderName: '田中太郎' },
-        { emojis: ['🙏', '💪'], message: 'とても勉強になりました', senderName: '山田花子' },
-        { emojis: ['❤️'], message: 'いつもありがとうございます！', senderName: '鈴木一郎' },
-        { emojis: ['👍', '🔥'], message: '', senderName: '佐藤次郎' },
-        { emojis: ['🎉'], message: 'お疲れ様でした！', senderName: '高橋三郎' }
-      ]
-    };
-
     function renderSummary(data) {
       eventTitleEl.textContent = data.eventTitle;
       totalGratitudes.textContent = data.gratitudes.length;
@@ -277,14 +265,35 @@
       `).join('');
     }
 
+    function renderError(message) {
+      eventTitleEl.textContent = 'エラー';
+      messagesList.innerHTML = `<p class="no-message">${message}</p>`;
+    }
+
+    function renderLoading() {
+      eventTitleEl.textContent = '読み込み中...';
+      messagesList.innerHTML = '<p class="no-message">データを取得しています...</p>';
+    }
+
     // Listen for summary data
-    window.electronAPI.onLoadSummary((data) => {
-      // In real implementation, fetch from Firestore using data.eventCode
-      renderSummary(sampleData);
+    window.electronAPI.onLoadSummary(async (data) => {
+      renderLoading();
+
+      try {
+        const result = await window.electronAPI.getSummaryData(data.eventCode);
+        if (result.success) {
+          renderSummary(result.data);
+        } else {
+          renderError(result.error || 'データの取得に失敗しました');
+        }
+      } catch (error) {
+        console.error('Error loading summary:', error);
+        renderError('データの取得に失敗しました');
+      }
     });
 
-    // Initial render with sample data
-    renderSummary(sampleData);
+    // Initial loading state
+    renderLoading();
   </script>
 </body>
 </html>

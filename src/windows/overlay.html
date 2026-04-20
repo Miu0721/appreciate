@@ -182,9 +182,9 @@
     .emoji-particle {
       position: fixed;
       bottom: 80px;
-      font-size: 28px;
+      font-size: 32px;
       pointer-events: none;
-      animation: floatUp 3.5s ease-out forwards;
+      animation: floatUp 4s ease-out forwards;
       opacity: 0;
       z-index: 1000;
     }
@@ -192,23 +192,15 @@
     @keyframes floatUp {
       0% {
         opacity: 0;
-        transform: translateY(0) translateX(0) scale(0.5);
+        transform: translateY(0) scale(0.6);
       }
-      15% {
+      10% {
         opacity: 1;
-        transform: translateY(-40px) translateX(5px) scale(1);
-      }
-      40% {
-        opacity: 1;
-        transform: translateY(-25vh) translateX(-8px) scale(1);
-      }
-      70% {
-        opacity: 0.7;
-        transform: translateY(-45vh) translateX(5px) scale(0.95);
+        transform: translateY(-30px) scale(1);
       }
       100% {
         opacity: 0;
-        transform: translateY(-60vh) translateX(0) scale(0.9);
+        transform: translateY(-55vh) scale(0.85);
       }
     }
 
@@ -309,28 +301,48 @@
       window.electronAPI.closeOverlay();
     });
 
-    // パーティクル生成（上限付き、レーン方式で均等配置）
-    let laneIndex = 0;
-    const LANES = 8; // 8レーンで均等配置
+    // マウス位置に応じてクリック可能/透過を切り替え
+    let isIgnoring = true;
+    document.addEventListener('mousemove', (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const isOverClickable = el && (
+        el.closest('.control-panel') ||
+        el.closest('.title-header') ||
+        el.closest('.gratitude-card')
+      );
 
+      if (isOverClickable && isIgnoring) {
+        isIgnoring = false;
+        window.electronAPI.setIgnoreMouseEvents(false);
+      } else if (!isOverClickable && !isIgnoring) {
+        isIgnoring = true;
+        window.electronAPI.setIgnoreMouseEvents(true);
+      }
+    });
+
+    // パーティクル生成（自然な配置）
     function createEmojiParticle(emoji) {
-      if (activeParticles >= MAX_PARTICLES) return;
+      if (activeParticles >= MAX_PARTICLES) {
+        console.log('MAX_PARTICLES reached, skipping:', emoji);
+        return;
+      }
       activeParticles++;
 
       const el = document.createElement('div');
       el.className = 'emoji-particle';
       el.textContent = emoji;
 
-      // レーン方式: 画面右側25%を8分割して順番に配置
-      const laneWidth = (window.innerWidth * 0.25) / LANES;
-      const baseX = window.innerWidth * 0.7;
-      const x = baseX + (laneIndex % LANES) * laneWidth + Math.random() * laneWidth * 0.5;
-      laneIndex++;
+      // 画面右側30%にランダム配置
+      const baseX = window.innerWidth * 0.65;
+      const range = window.innerWidth * 0.30;
+      const x = baseX + Math.random() * range;
 
       el.style.left = x + 'px';
-      const duration = 5; // 統一された時間
+      const duration = 4;
       el.style.animationDuration = duration + 's';
       document.body.appendChild(el);
+
+      console.log('Particle created:', emoji, 'at x:', x, 'activeParticles:', activeParticles);
 
       setTimeout(() => {
         el.remove();
@@ -379,7 +391,7 @@
 
       setTimeout(() => card.parentNode && card.remove(), 30000);
 
-      // パーティクル（実際の数×3を10秒で表示）
+      // パーティクル（実際の数×3を緩めの間隔で表示）
       const multipliedEmojis = [];
       emojis.forEach(emoji => {
         for (let i = 0; i < 3; i++) {
@@ -387,7 +399,8 @@
         }
       });
 
-      const interval = Math.max(33, 10000 / multipliedEmojis.length); // 最長10秒
+      console.log('Creating particles:', multipliedEmojis.length, 'from', emojis.length, 'emojis');
+      const interval = 300; // 300ms間隔で統一
       multipliedEmojis.forEach((emoji, i) => {
         setTimeout(() => createEmojiParticle(emoji), i * interval);
       });

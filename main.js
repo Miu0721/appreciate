@@ -277,7 +277,7 @@ async function startCalendarPolling() {
 }
 
 // Send Slack DM to attendees
-async function sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle) {
+async function sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle, deadlineStr) {
   if (!slackClient) {
     console.log('Slack client not configured, skipping DM notifications');
     return;
@@ -297,7 +297,7 @@ async function sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle) {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `📣 *「${eventTitle}」が終了しました*\n\n主催者に感謝を送りましょう！`
+              text: `📣 *「${eventTitle}」が終了しました*\n\n主催者に感謝を送りましょう！\n\n⏰ *締切: ${deadlineStr}*`
             }
           },
           {
@@ -373,38 +373,76 @@ async function processAppreciateEvent(event) {
   }
 }
 
+// Calculate deadline (next day 9:59) and delivery time (next day 10:00)
+function calculateDeadlineAndDeliveryTime(eventEndTime) {
+  const endDate = new Date(eventEndTime);
+
+  // 翌日の9:59:59
+  const deadline = new Date(endDate);
+  deadline.setDate(deadline.getDate() + 1);
+  deadline.setHours(9, 59, 59, 999);
+
+  // 翌日の10:00:00
+  const deliveryTime = new Date(endDate);
+  deliveryTime.setDate(deliveryTime.getDate() + 1);
+  deliveryTime.setHours(10, 0, 0, 0);
+
+  return { deadline, deliveryTime };
+}
+
+// Format deadline for display
+function formatDeadline(deadline) {
+  const month = deadline.getMonth() + 1;
+  const day = deadline.getDate();
+  const hours = deadline.getHours();
+  const minutes = String(deadline.getMinutes()).padStart(2, '0');
+  return `${month}/${day} ${hours}:${minutes}`;
+}
+
 // Trigger event end flow
 async function triggerEventEnd(eventCode, eventTitle) {
-  // Update event status
-  await updateEventDoc(eventCode, { status: 'collecting' });
-
-  // Get attendees and send Slack DM (全員に送信)
   const trackedEvent = getTrackedEventByCode(eventCode);
-  if (trackedEvent && trackedEvent.data.attendees) {
-    const attendeeEmails = trackedEvent.data.attendees; // 主催者含め全員
-    sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle);
+  if (!trackedEvent) {
+    console.error('Tracked event not found:', eventCode);
+    return;
   }
 
-  // Schedule 3-minute warning (7 minutes after start)
-  setTimeout(() => {
-    showThreeMinuteWarning(eventTitle);
-  }, 7 * 60 * 1000);
+  const { deadline, deliveryTime } = calculateDeadlineAndDeliveryTime(trackedEvent.endTime);
+  const now = new Date();
 
-  // Schedule collection end (10 minutes after event end)
-  setTimeout(async () => {
-    await endGratitudeCollection(eventCode, eventTitle);
-  }, 10 * 60 * 1000);
-}
-
-// Show 3-minute warning to organizer
-function showThreeMinuteWarning(eventTitle) {
-  const notification = new Notification({
-    title: 'Appreciate',
-    body: `「${eventTitle}」の感謝受付終了まであと3分です`,
-    silent: false
+  // Update event status with deadline info
+  await updateEventDoc(eventCode, {
+    status: 'collecting',
+    deadline: Timestamp.fromDate(deadline),
+    deliveryTime: Timestamp.fromDate(deliveryTime)
   });
-  notification.show();
+
+  // Get attendees and send Slack DM with deadline (全員に送信)
+  if (trackedEvent.data.attendees) {
+    const attendeeEmails = trackedEvent.data.attendees;
+    const deadlineStr = formatDeadline(deadline);
+    sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle, deadlineStr);
+  }
+
+  // Schedule collection end (翌日9:59)
+  const timeUntilDeadline = deadline.getTime() - now.getTime();
+  if (timeUntilDeadline > 0) {
+    console.log(`Scheduling collection end in ${Math.round(timeUntilDeadline / 1000 / 60)} minutes`);
+    setTimeout(async () => {
+      await endGratitudeCollection(eventCode, eventTitle);
+    }, timeUntilDeadline);
+  }
+
+  // Schedule delivery (翌日10:00)
+  const timeUntilDelivery = deliveryTime.getTime() - now.getTime();
+  if (timeUntilDelivery > 0) {
+    console.log(`Scheduling delivery in ${Math.round(timeUntilDelivery / 1000 / 60)} minutes`);
+    setTimeout(async () => {
+      await deliverGratitudes(eventCode, eventTitle);
+    }, timeUntilDelivery);
+  }
 }
+
 
 // Send Slack DM to organizer with view link
 async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
@@ -456,18 +494,27 @@ async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
   }
 }
 
-// End gratitude collection and notify organizer
+// End gratitude collection (翌日9:59 - 受付終了のみ)
 async function endGratitudeCollection(eventCode, eventTitle) {
+  console.log(`Ending gratitude collection for: ${eventTitle}`);
   await updateEventDoc(eventCode, { status: 'completed' });
+}
+
+// Deliver gratitudes to organizer (翌日10:00 - 配信開始)
+async function deliverGratitudes(eventCode, eventTitle) {
+  console.log(`Delivering gratitudes for: ${eventTitle}`);
 
   // Show overlay with gratitudes
   showGratitudeOverlay(eventCode, eventTitle);
 
-  // Also send Slack DM as backup
+  // Also send Slack DM to organizer
   const trackedEvent = getTrackedEventByCode(eventCode);
   if (trackedEvent && trackedEvent.data.organizerEmail) {
     await sendSlackDMToOrganizer(trackedEvent.data.organizerEmail, eventCode, eventTitle);
   }
+
+  // Mark as delivered
+  await updateEventDoc(eventCode, { delivered: true });
 }
 
 // Show gratitude overlay and mark as shown
@@ -484,43 +531,63 @@ async function showGratitudeOverlay(eventCode, eventTitle) {
   }
 }
 
-// Check for pending overlays on app startup
+// Check for pending deliveries on app startup
 async function checkPendingOverlays() {
   try {
     const user = store.get('user');
     if (!user || !user.email) {
-      console.log('No user logged in, skipping pending overlay check');
+      console.log('No user logged in, skipping pending delivery check');
       return;
     }
 
-    // Query events that are completed but overlay not shown
+    const now = new Date();
+
+    // Query events that are completed but not yet delivered
     const eventsQuery = query(
       collection(db, 'events'),
       where('organizerEmail', '==', user.email),
-      where('status', '==', 'completed'),
-      where('overlayShown', '==', false)
+      where('status', '==', 'completed')
     );
 
     const snapshot = await getDocs(eventsQuery);
 
     if (snapshot.empty) {
-      console.log('No pending overlays');
+      console.log('No pending deliveries');
       return;
     }
 
-    // Show overlay for each pending event (with delay between each)
-    const pendingEvents = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    console.log(`Found ${pendingEvents.length} pending overlay(s)`);
+    // Filter events where delivery time has passed but not yet delivered
+    const pendingEvents = snapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(event => {
+        // Skip if already delivered or overlay shown
+        if (event.delivered || event.overlayShown) return false;
+
+        // Check if delivery time has passed
+        const deliveryTime = event.deliveryTime?.toDate?.();
+        if (!deliveryTime) {
+          // Legacy events without deliveryTime - skip (don't auto-deliver old events)
+          return false;
+        }
+        return now >= deliveryTime;
+      });
+
+    if (pendingEvents.length === 0) {
+      console.log('No pending deliveries');
+      return;
+    }
+
+    console.log(`Found ${pendingEvents.length} pending delivery(s)`);
 
     for (let i = 0; i < pendingEvents.length; i++) {
       const event = pendingEvents[i];
 
-      // Add delay between overlays if multiple
+      // Add delay between deliveries if multiple
       if (i > 0) {
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
-      showGratitudeOverlay(event.eventCode, event.title);
+      await deliverGratitudes(event.id, event.title);
     }
   } catch (error) {
     console.error('Error checking pending overlays:', error);
@@ -602,6 +669,43 @@ ipcMain.handle('get-event-by-code', async (event, eventCode) => {
   }
 });
 
+ipcMain.handle('get-summary-data', async (event, eventCode) => {
+  try {
+    // Get event info
+    const eventDoc = await getDoc(doc(db, 'events', eventCode));
+    if (!eventDoc.exists()) {
+      return { success: false, error: 'イベントが見つかりません' };
+    }
+    const eventData = eventDoc.data();
+
+    // Get gratitudes for this event
+    const gratitudesQuery = query(
+      collection(db, 'gratitudes'),
+      where('eventCode', '==', eventCode)
+    );
+    const gratitudesSnapshot = await getDocs(gratitudesQuery);
+
+    const gratitudes = gratitudesSnapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        emojis: data.emojis || [],
+        message: data.message || ''
+      };
+    });
+
+    return {
+      success: true,
+      data: {
+        eventTitle: eventData.title || '',
+        gratitudes
+      }
+    };
+  } catch (error) {
+    console.error('Error getting summary data:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('open-summary', (event, eventCode) => {
   createSummaryWindow();
   if (summaryWindow) {
@@ -614,6 +718,12 @@ ipcMain.handle('open-summary', (event, eventCode) => {
 ipcMain.handle('close-overlay', () => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.close();
+  }
+});
+
+ipcMain.handle('set-ignore-mouse-events', (event, ignore) => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.setIgnoreMouseEvents(ignore);
   }
 });
 

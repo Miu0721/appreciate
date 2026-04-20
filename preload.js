@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Events
   getEventByCode: (eventCode) => ipcRenderer.invoke('get-event-by-code', eventCode),
+  getSummaryData: (eventCode) => ipcRenderer.invoke('get-summary-data', eventCode),
 
   // Gratitude
   submitGratitude: (data) => ipcRenderer.invoke('submit-gratitude', data),
@@ -17,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Windows
   openSummary: (eventCode) => ipcRenderer.invoke('open-summary', eventCode),
   closeOverlay: () => ipcRenderer.invoke('close-overlay'),
+  setIgnoreMouseEvents: (ignore) => ipcRenderer.invoke('set-ignore-mouse-events', ignore),
 
   // Event listeners
   onShowGratitudes: (callback) => ipcRenderer.on('show-gratitudes', (event, data) => callback(data)),

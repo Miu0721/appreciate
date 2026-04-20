@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebClient } = require('@slack/web-api');
 const { initializeApp } = require('firebase/app');
-const { getFirestore, doc, setDoc, serverTimestamp } = require('firebase/firestore');
+const { getFirestore, doc, setDoc, getDoc, serverTimestamp } = require('firebase/firestore');
 
 require('dotenv').config();
 
@@ -49,6 +49,21 @@ app.post('/slack/interactions', express.urlencoded({ extended: true }), async (r
       // Open gratitude modal from DM
       if (action.action_id === 'open_gratitude_modal') {
         const [eventCode, eventTitle] = action.value.split('|');
+
+        // Check if event is still accepting gratitudes
+        const eventDoc = await getDoc(doc(db, 'events', eventCode));
+        if (eventDoc.exists()) {
+          const eventData = eventDoc.data();
+          if (eventData.status === 'completed') {
+            // Event has ended - show closed modal
+            await slackClient.views.open({
+              trigger_id: payload.trigger_id,
+              view: buildClosedModal(eventTitle)
+            });
+            return res.status(200).send();
+          }
+        }
+
         const key = getStateKey(payload.user.id, eventCode);
         userEmojiState.set(key, []); // 初期化
 
@@ -99,6 +114,20 @@ app.post('/slack/interactions', express.urlencoded({ extended: true }), async (r
       const metadata = JSON.parse(payload.view.private_metadata);
       const values = payload.view.state.values;
       const key = getStateKey(payload.user.id, metadata.eventCode);
+
+      // Check if event is still accepting gratitudes
+      const eventDoc = await getDoc(doc(db, 'events', metadata.eventCode));
+      if (eventDoc.exists()) {
+        const eventData = eventDoc.data();
+        if (eventData.status === 'completed') {
+          // Event has ended
+          userEmojiState.delete(key);
+          return res.json({
+            response_action: 'update',
+            view: buildClosedModal(metadata.eventTitle)
+          });
+        }
+      }
 
       // サーバー側の状態から絵文字を取得
       const emojis = userEmojiState.get(key) || [];
@@ -188,6 +217,38 @@ function verifySlackSignature(req, rawBody) {
     .digest('hex');
 
   return crypto.timingSafeEqual(Buffer.from(mySignature), Buffer.from(slackSignature));
+}
+
+// Build closed modal (event ended)
+function buildClosedModal(eventTitle) {
+  return {
+    type: 'modal',
+    title: {
+      type: 'plain_text',
+      text: '受付終了'
+    },
+    close: {
+      type: 'plain_text',
+      text: '閉じる'
+    },
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `*${eventTitle}*`
+        }
+      },
+      { type: 'divider' },
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: '⏰ *感謝の受付は終了しました*\n\nこのイベントの感謝受付期間は終了しています。\nまたの機会にご利用ください！'
+        }
+      }
+    ]
+  };
 }
 
 // Build gratitude modal with tap-to-add emojis（連打対応）
