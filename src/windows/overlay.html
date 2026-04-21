@@ -386,7 +386,7 @@
       `;
 
       const existingCards = gratitudeArea.children.length;
-      card.style.bottom = (existingCards * 10) + 'px';
+      card.style.bottom = (existingCards * 40) + 'px';
       gratitudeArea.appendChild(card);
 
       setTimeout(() => card.parentNode && card.remove(), 30000);
@@ -414,7 +414,7 @@
       if (currentIndex < gratitudes.length) {
         displayGratitude(gratitudes[currentIndex]);
         currentIndex++;
-        setTimeout(streamGratitudes, 2000); // 2秒間隔で統一
+        setTimeout(streamGratitudes, 2000); // 2秒間隔
       }
     }
 

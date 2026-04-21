@@ -1,525 +1,30 @@
+/**
+ * Appreciate - Event Gratitude Collection System
+ * Electron Main Process Entry Point
+ */
+
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, Notification, Tray, Menu, nativeImage, screen } = require('electron');
-const path = require('path');
+const { app, BrowserWindow } = require('electron');
 const Store = require('electron-store');
-const { google } = require('googleapis');
-const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where, onSnapshot, serverTimestamp, Timestamp } = require('firebase/firestore');
-const { WebClient } = require('@slack/web-api');
 
-// Electron Store for local settings
-const store = new Store({
-  encryptionKey: 'appreciate-secure-key-2024'
-});
-
-// Firebase configuration
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY || 'YOUR_API_KEY',
-  authDomain: 'appreciate-54692.firebaseapp.com',
-  projectId: 'appreciate-54692',
-  storageBucket: 'appreciate-54692.appspot.com',
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || 'YOUR_SENDER_ID',
-  appId: process.env.FIREBASE_APP_ID || 'YOUR_APP_ID'
-};
-
-// Initialize Firebase
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
-
-// Google OAuth2 configuration
-const SCOPES = [
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile'
-];
-
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID || 'YOUR_CLIENT_ID',
-  process.env.GOOGLE_CLIENT_SECRET || 'YOUR_CLIENT_SECRET',
-  'http://localhost:3000/oauth/callback'
-);
-
-// Slack client
-const slackClient = process.env.SLACK_BOT_TOKEN
-  ? new WebClient(process.env.SLACK_BOT_TOKEN)
-  : null;
-
-// Window references
-let mainWindow = null;
-let overlayWindow = null;
-let summaryWindow = null;
-let tray = null;
-
-// Calendar polling interval (1 minute)
-const POLLING_INTERVAL = 60 * 1000;
-let pollingTimer = null;
-
-// Tracked events
-const trackedEvents = new Map();
-
-function getSecureWebPreferences() {
-  return {
-    preload: path.join(__dirname, 'preload.js'),
-    contextIsolation: true,
-    nodeIntegration: false
-  };
-}
-
-function getTrackedEventByCode(eventCode) {
-  return Array.from(trackedEvents.values()).find(event => event.eventCode === eventCode);
-}
-
-async function updateEventDoc(eventCode, updates) {
-  try {
-    const eventRef = doc(db, 'events', eventCode);
-    await setDoc(eventRef, updates, { merge: true });
-    return true;
-  } catch (error) {
-    console.error(`Error updating event ${eventCode}:`, error);
-    return false;
-  }
-}
-
-async function getSlackUserIdByEmail(email, label) {
-  if (!slackClient) {
-    return null;
-  }
-
-  const userResult = await slackClient.users.lookupByEmail({ email });
-  if (!userResult.ok || !userResult.user) {
-    console.log(`Slack user not found for ${label}: ${email}`);
-    return null;
-  }
-
-  return userResult.user.id;
-}
-
-// Generate event code (6-8 alphanumeric characters)
-function generateEventCode() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const length = Math.floor(Math.random() * 3) + 6; // 6-8 characters
-  let code = '';
-  for (let i = 0; i < length; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-// Create main window (login)
-function createMainWindow() {
-  mainWindow = new BrowserWindow({
-    width: 400,
-    height: 500,
-    resizable: false,
-    webPreferences: getSecureWebPreferences(),
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#1a1a2e'
-  });
-
-  mainWindow.loadFile(path.join(__dirname, 'src', 'windows', 'login.html'));
-
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
-}
-
-// Create overlay window for gratitude display
-function createOverlayWindow() {
-  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-
-  overlayWindow = new BrowserWindow({
-    width: width,
-    height: height,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    webPreferences: getSecureWebPreferences()
-  });
-
-  overlayWindow.loadFile(path.join(__dirname, 'src', 'windows', 'overlay.html'));
-  overlayWindow.setIgnoreMouseEvents(true, { forward: true });
-
-  overlayWindow.on('closed', () => {
-    overlayWindow = null;
-  });
-}
-
-// Create summary window
-function createSummaryWindow() {
-  summaryWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    webPreferences: getSecureWebPreferences(),
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#1a1a2e'
-  });
-
-  summaryWindow.loadFile(path.join(__dirname, 'src', 'windows', 'summary.html'));
-
-  summaryWindow.on('closed', () => {
-    summaryWindow = null;
-  });
-}
-
-// Create system tray
-function createTray() {
-  const iconPath = path.join(__dirname, 'assets', 'tray-icon.png');
-  let trayIcon;
-
-  try {
-    const fs = require('fs');
-    if (fs.existsSync(iconPath)) {
-      trayIcon = nativeImage.createFromPath(iconPath);
-    } else {
-      // Create a simple 16x16 icon programmatically (pink circle)
-      trayIcon = nativeImage.createFromDataURL(
-        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA' +
-        'gElEQVQ4T2NkoBAwUqifYdQAhtEwYBgeBv9RYoARl5ewGfAfQ+P/DAwM/0E0I7oBjP8Z' +
-        'GP7jMgSbZkZGBgZGRgYGRmyasamBuQKrAbgMwWYIIw5XEDQAZgg2Q4hyBS5DiHYFLkOI' +
-        'dgU+Q0hyBTZDSHYFpgEku4IYQ0hOC4QMAQC4HTARCwGnQgAAAABJRU5ErkJggg=='
-      );
-      trayIcon = trayIcon.resize({ width: 16, height: 16 });
-    }
-  } catch (e) {
-    // Fallback: create minimal icon
-    trayIcon = nativeImage.createFromDataURL(
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA' +
-      'gElEQVQ4T2NkoBAwUqifYdQAhtEwYBgeBv9RYoARl5ewGfAfQ+P/DAwM/0E0I7oBjP8Z' +
-      'GP7jMgSbZkZGBgZGRgYGRmyasamBuQKrAbgMwWYIIw5XEDQAZgg2Q4hyBS5DiHYFLkOI' +
-      'dgU+Q0hyBTZDSHYFpgEku4IYQ0hOC4QMAQC4HTARCwGnQgAAAABJRU5ErkJggg=='
-    );
-  }
-
-  tray = new Tray(trayIcon);
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Appreciate',
-      enabled: false
-    },
-    { type: 'separator' },
-    {
-      label: 'ダッシュボードを開く',
-      click: () => {
-        if (!mainWindow) createMainWindow();
-        mainWindow.show();
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '🧪 オーバーレイテスト (TEST001)',
-      click: () => {
-        showGratitudeOverlay('TEST001', 'テストイベント');
-      }
-    },
-    { type: 'separator' },
-    {
-      label: '終了',
-      click: () => app.quit()
-    }
-  ]);
-
-  tray.setToolTip('Appreciate - イベント感謝収集システム');
-  tray.setContextMenu(contextMenu);
-}
-
-// Start calendar polling
-async function startCalendarPolling() {
-  const tokens = store.get('tokens');
-  if (!tokens) {
-    console.log('No tokens found, skipping calendar polling');
-    return;
-  }
-
-  oauth2Client.setCredentials(tokens);
-  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
-  const pollCalendar = async () => {
-    try {
-      const now = new Date();
-      const timeMin = now.toISOString();
-      const timeMax = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-
-      const response = await calendar.events.list({
-        calendarId: 'primary',
-        timeMin,
-        timeMax,
-        singleEvents: true,
-        orderBy: 'startTime'
-      });
-
-      const events = response.data.items || [];
-      console.log(`[Calendar] Found ${events.length} events`);
-
-      for (const event of events) {
-        // Check for title containing "社内イベント" or tags in description
-        const title = event.summary || '';
-        const description = event.description || '';
-        console.log(`[Calendar] Checking event: "${title}"`);
-        if (title.includes('社内イベント') || description.includes('#appreciate') || description.includes('#ありがとう')) {
-          console.log(`[Calendar] Matched! Processing: "${title}"`);
-          await processAppreciateEvent(event);
-        }
-      }
-    } catch (error) {
-      console.error('Calendar polling error:', error);
-      // Retry on next interval
-    }
-  };
-
-  // Initial poll
-  await pollCalendar();
-
-  // Set up interval
-  pollingTimer = setInterval(pollCalendar, POLLING_INTERVAL);
-}
-
-// Send Slack DM to attendees
-async function sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle, deadlineStr) {
-  if (!slackClient) {
-    console.log('Slack client not configured, skipping DM notifications');
-    return;
-  }
-
-  for (const email of attendeeEmails) {
-    try {
-      const slackUserId = await getSlackUserIdByEmail(email, 'email');
-      if (!slackUserId) continue;
-
-      // Send DM with button to open gratitude modal
-      await slackClient.chat.postMessage({
-        channel: slackUserId,
-        text: `「${eventTitle}」が終了しました。感謝を送りましょう！`,
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `📣 *「${eventTitle}」が終了しました*\n\n主催者に感謝を送りましょう！\n\n⏰ *締切: ${deadlineStr}*`
-            }
-          },
-          {
-            type: 'actions',
-            elements: [
-              {
-                type: 'button',
-                text: {
-                  type: 'plain_text',
-                  text: '🙏 感謝を送る',
-                  emoji: true
-                },
-                style: 'primary',
-                action_id: 'open_gratitude_modal',
-                value: `${eventCode}|${eventTitle}`
-              }
-            ]
-          }
-        ]
-      });
-
-      console.log(`Slack DM sent to ${email}`);
-    } catch (error) {
-      console.error(`Failed to send Slack DM to ${email}:`, error.message);
-    }
-  }
-}
-
-// Process appreciate-tagged event
-async function processAppreciateEvent(event) {
-  const eventId = event.id;
-
-  // Skip if already tracked
-  if (trackedEvents.has(eventId)) {
-    return;
-  }
-
-  const endTime = new Date(event.end.dateTime || event.end.date);
-  const now = new Date();
-
-  // Register event in Firestore
-  const eventCode = generateEventCode();
-  const eventData = {
-    googleEventId: eventId,
-    title: event.summary || '',
-    description: event.description || '',
-    startTime: Timestamp.fromDate(new Date(event.start.dateTime || event.start.date)),
-    endTime: Timestamp.fromDate(endTime),
-    eventCode,
-    organizerEmail: event.organizer?.email || '',
-    attendees: (event.attendees || []).map(a => a.email),
-    status: 'pending',
-    overlayShown: false,
-    createdAt: serverTimestamp()
-  };
-
-  try {
-    await setDoc(doc(db, 'events', eventCode), eventData);
-    trackedEvents.set(eventId, { eventCode, endTime, data: eventData });
-
-    // Schedule end-of-event notification
-    const timeUntilEnd = endTime.getTime() - now.getTime();
-    if (timeUntilEnd > 0) {
-      setTimeout(() => {
-        triggerEventEnd(eventCode, event.summary);
-      }, timeUntilEnd);
-    } else if (timeUntilEnd > -10 * 60 * 1000) {
-      // Event ended within last 10 minutes, trigger immediately
-      triggerEventEnd(eventCode, event.summary);
-    }
-  } catch (error) {
-    console.error('Error saving event to Firestore:', error);
-  }
-}
-
-// Calculate deadline (next day 9:59) and delivery time (next day 10:00)
-function calculateDeadlineAndDeliveryTime(eventEndTime) {
-  const endDate = new Date(eventEndTime);
-
-  // 翌日の9:59:59
-  const deadline = new Date(endDate);
-  deadline.setDate(deadline.getDate() + 1);
-  deadline.setHours(9, 59, 59, 999);
-
-  // 翌日の10:00:00
-  const deliveryTime = new Date(endDate);
-  deliveryTime.setDate(deliveryTime.getDate() + 1);
-  deliveryTime.setHours(10, 0, 0, 0);
-
-  return { deadline, deliveryTime };
-}
-
-// Format deadline for display
-function formatDeadline(deadline) {
-  const month = deadline.getMonth() + 1;
-  const day = deadline.getDate();
-  const hours = deadline.getHours();
-  const minutes = String(deadline.getMinutes()).padStart(2, '0');
-  return `${month}/${day} ${hours}:${minutes}`;
-}
-
-// Trigger event end flow
-async function triggerEventEnd(eventCode, eventTitle) {
-  const trackedEvent = getTrackedEventByCode(eventCode);
-  if (!trackedEvent) {
-    console.error('Tracked event not found:', eventCode);
-    return;
-  }
-
-  const { deadline, deliveryTime } = calculateDeadlineAndDeliveryTime(trackedEvent.endTime);
-  const now = new Date();
-
-  // Update event status with deadline info
-  await updateEventDoc(eventCode, {
-    status: 'collecting',
-    deadline: Timestamp.fromDate(deadline),
-    deliveryTime: Timestamp.fromDate(deliveryTime)
-  });
-
-  // Get attendees and send Slack DM with deadline (全員に送信)
-  if (trackedEvent.data.attendees) {
-    const attendeeEmails = trackedEvent.data.attendees;
-    const deadlineStr = formatDeadline(deadline);
-    sendSlackDMToAttendees(attendeeEmails, eventCode, eventTitle, deadlineStr);
-  }
-
-  // Schedule collection end (翌日9:59)
-  const timeUntilDeadline = deadline.getTime() - now.getTime();
-  if (timeUntilDeadline > 0) {
-    console.log(`Scheduling collection end in ${Math.round(timeUntilDeadline / 1000 / 60)} minutes`);
-    setTimeout(async () => {
-      await endGratitudeCollection(eventCode, eventTitle);
-    }, timeUntilDeadline);
-  }
-
-  // Schedule delivery (翌日10:00)
-  const timeUntilDelivery = deliveryTime.getTime() - now.getTime();
-  if (timeUntilDelivery > 0) {
-    console.log(`Scheduling delivery in ${Math.round(timeUntilDelivery / 1000 / 60)} minutes`);
-    setTimeout(async () => {
-      await deliverGratitudes(eventCode, eventTitle);
-    }, timeUntilDelivery);
-  }
-}
-
-
-// Send Slack DM to organizer with view link
-async function sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle) {
-  if (!slackClient) {
-    console.log('Slack client not configured, skipping organizer DM');
-    return;
-  }
-
-  const webAppUrl = process.env.WEB_APP_URL || 'http://localhost:3000';
-  const viewUrl = `${webAppUrl}/view.html?code=${eventCode}`;
-
-  try {
-    const slackUserId = await getSlackUserIdByEmail(organizerEmail, 'organizer email');
-    if (!slackUserId) return;
-
-    // Send DM with link to view gratitudes
-    await slackClient.chat.postMessage({
-      channel: slackUserId,
-      text: `「${eventTitle}」の感謝が届きました！`,
-      blocks: [
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `🎉 *「${eventTitle}」の感謝収集が完了しました！*\n\n参加者からの感謝が届いています。`
-          }
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: {
-                type: 'plain_text',
-                text: '✨ 感謝を見る',
-                emoji: true
-              },
-              style: 'primary',
-              url: viewUrl
-            }
-          ]
-        }
-      ]
-    });
-
-    console.log(`Slack DM sent to organizer: ${organizerEmail}`);
-  } catch (error) {
-    console.error(`Failed to send Slack DM to organizer ${organizerEmail}:`, error.message);
-  }
-}
-
-// End gratitude collection (翌日9:59 - 受付終了のみ)
-async function endGratitudeCollection(eventCode, eventTitle) {
-  console.log(`Ending gratitude collection for: ${eventTitle}`);
-  await updateEventDoc(eventCode, { status: 'completed' });
-}
-
-// Deliver gratitudes to organizer (翌日10:00 - 配信開始)
-async function deliverGratitudes(eventCode, eventTitle) {
-  console.log(`Delivering gratitudes for: ${eventTitle}`);
-
-  // Show overlay with gratitudes
-  showGratitudeOverlay(eventCode, eventTitle);
-
-  // Also send Slack DM to organizer
-  const trackedEvent = getTrackedEventByCode(eventCode);
-  if (trackedEvent && trackedEvent.data.organizerEmail) {
-    await sendSlackDMToOrganizer(trackedEvent.data.organizerEmail, eventCode, eventTitle);
-  }
-
-  // Mark as delivered
-  await updateEventDoc(eventCode, { delivered: true });
-}
-
-// Show gratitude overlay and mark as shown
+// Import modules
+const { oauth2Client } = require('./src/config/google');
+const { createMainWindow, createOverlayWindow, getOverlayWindow } = require('./src/windows/manager');
+const { createTray, setOverlayFunction: setTrayOverlayFunction } = require('./src/windows/tray');
+const { registerIpcHandlers, getStore } = require('./src/ipc/handlers');
+const { startCalendarPolling, stopCalendarPolling, setOverlayFunction: setCalendarOverlayFunction } = require('./src/services/calendar');
+const { getPendingDeliveries, updateEventDoc } = require('./src/services/event');
+const { sendSlackDMToOrganizer } = require('./src/services/notification');
+
+const store = new Store({ encryptionKey: 'appreciate-secure-key-2024' });
+
+/**
+ * Show gratitude overlay and mark as shown
+ * @param {string} eventCode - Event code
+ * @param {string} eventTitle - Event title
+ */
 async function showGratitudeOverlay(eventCode, eventTitle) {
-  createOverlayWindow();
+  const overlayWindow = createOverlayWindow();
 
   if (overlayWindow) {
     overlayWindow.webContents.on('did-finish-load', async () => {
@@ -531,7 +36,30 @@ async function showGratitudeOverlay(eventCode, eventTitle) {
   }
 }
 
-// Check for pending deliveries on app startup
+/**
+ * Deliver gratitudes to organizer
+ * @param {string} eventCode - Event code
+ * @param {string} eventTitle - Event title
+ * @param {string} organizerEmail - Organizer email
+ */
+async function deliverGratitudes(eventCode, eventTitle, organizerEmail) {
+  console.log(`Delivering gratitudes for: ${eventTitle}`);
+
+  // Show overlay with gratitudes
+  await showGratitudeOverlay(eventCode, eventTitle);
+
+  // Send Slack DM to organizer
+  if (organizerEmail) {
+    await sendSlackDMToOrganizer(organizerEmail, eventCode, eventTitle);
+  }
+
+  // Mark as delivered
+  await updateEventDoc(eventCode, { delivered: true });
+}
+
+/**
+ * Check for pending deliveries on app startup
+ */
 async function checkPendingOverlays() {
   try {
     const user = store.get('user');
@@ -540,37 +68,7 @@ async function checkPendingOverlays() {
       return;
     }
 
-    const now = new Date();
-
-    // Query events that are completed but not yet delivered
-    const eventsQuery = query(
-      collection(db, 'events'),
-      where('organizerEmail', '==', user.email),
-      where('status', '==', 'completed')
-    );
-
-    const snapshot = await getDocs(eventsQuery);
-
-    if (snapshot.empty) {
-      console.log('No pending deliveries');
-      return;
-    }
-
-    // Filter events where delivery time has passed but not yet delivered
-    const pendingEvents = snapshot.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(event => {
-        // Skip if already delivered or overlay shown
-        if (event.delivered || event.overlayShown) return false;
-
-        // Check if delivery time has passed
-        const deliveryTime = event.deliveryTime?.toDate?.();
-        if (!deliveryTime) {
-          // Legacy events without deliveryTime - skip (don't auto-deliver old events)
-          return false;
-        }
-        return now >= deliveryTime;
-      });
+    const pendingEvents = await getPendingDeliveries(user.email);
 
     if (pendingEvents.length === 0) {
       console.log('No pending deliveries');
@@ -587,148 +85,23 @@ async function checkPendingOverlays() {
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
-      await deliverGratitudes(event.id, event.title);
+      await deliverGratitudes(event.id, event.title, event.organizerEmail);
     }
   } catch (error) {
     console.error('Error checking pending overlays:', error);
   }
 }
 
-// IPC Handlers
-ipcMain.handle('get-auth-url', () => {
-  return oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-    prompt: 'consent'
-  });
-});
-
-ipcMain.handle('exchange-code', async (event, code) => {
-  try {
-    const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
-    store.set('tokens', tokens);
-
-    // Get user info
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-    const userInfo = await oauth2.userinfo.get();
-    store.set('user', userInfo.data);
-
-    // Start calendar polling
-    startCalendarPolling();
-
-    return { success: true, user: userInfo.data };
-  } catch (error) {
-    console.error('Token exchange error:', error);
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('get-stored-user', () => {
-  return store.get('user');
-});
-
-ipcMain.handle('logout', () => {
-  store.delete('tokens');
-  store.delete('user');
-  if (pollingTimer) {
-    clearInterval(pollingTimer);
-    pollingTimer = null;
-  }
-  return { success: true };
-});
-
-ipcMain.handle('submit-gratitude', async (event, data) => {
-  const { eventCode, emojis, message } = data;
-
-  try {
-    const gratitudeId = `${eventCode}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    await setDoc(doc(db, 'gratitudes', gratitudeId), {
-      eventCode,
-      emojis,
-      message: message || '',
-      createdAt: serverTimestamp()
-    });
-
-    return { success: true };
-  } catch (error) {
-    console.error('Error submitting gratitude:', error);
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('get-event-by-code', async (event, eventCode) => {
-  try {
-    const eventDoc = await getDoc(doc(db, 'events', eventCode));
-    if (eventDoc.exists()) {
-      return { success: true, event: eventDoc.data() };
-    }
-    return { success: false, error: 'イベントが見つかりません' };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('get-summary-data', async (event, eventCode) => {
-  try {
-    // Get event info
-    const eventDoc = await getDoc(doc(db, 'events', eventCode));
-    if (!eventDoc.exists()) {
-      return { success: false, error: 'イベントが見つかりません' };
-    }
-    const eventData = eventDoc.data();
-
-    // Get gratitudes for this event
-    const gratitudesQuery = query(
-      collection(db, 'gratitudes'),
-      where('eventCode', '==', eventCode)
-    );
-    const gratitudesSnapshot = await getDocs(gratitudesQuery);
-
-    const gratitudes = gratitudesSnapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        emojis: data.emojis || [],
-        message: data.message || ''
-      };
-    });
-
-    return {
-      success: true,
-      data: {
-        eventTitle: eventData.title || '',
-        gratitudes
-      }
-    };
-  } catch (error) {
-    console.error('Error getting summary data:', error);
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle('open-summary', (event, eventCode) => {
-  createSummaryWindow();
-  if (summaryWindow) {
-    summaryWindow.webContents.on('did-finish-load', () => {
-      summaryWindow.webContents.send('load-summary', { eventCode });
-    });
-  }
-});
-
-ipcMain.handle('close-overlay', () => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.close();
-  }
-});
-
-ipcMain.handle('set-ignore-mouse-events', (event, ignore) => {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.setIgnoreMouseEvents(ignore);
-  }
-});
+// Set overlay function for tray and calendar
+setTrayOverlayFunction(showGratitudeOverlay);
+setCalendarOverlayFunction(showGratitudeOverlay);
 
 // App lifecycle
 app.whenReady().then(async () => {
+  // Register IPC handlers
+  registerIpcHandlers();
+
+  // Create main window and tray
   createMainWindow();
   createTray();
 
@@ -741,7 +114,7 @@ app.whenReady().then(async () => {
     // Check for pending overlays (events that ended while app was offline)
     setTimeout(() => {
       checkPendingOverlays();
-    }, 3000); // Wait 3 seconds for app to fully initialize
+    }, 3000);
   }
 
   app.on('activate', () => {
@@ -759,10 +132,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  if (pollingTimer) {
-    clearInterval(pollingTimer);
-  }
+  stopCalendarPolling();
 });
 
-// Local server for OAuth callback
+// Local server for OAuth callback and Slack interactions
 const server = require('./server');
