@@ -4,48 +4,80 @@
  */
 
 require('dotenv').config();
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Notification } = require('electron');
 const Store = require('electron-store');
 
 // Import modules
 const { oauth2Client } = require('./src/config/google');
 const { createMainWindow, createOverlayWindow, getOverlayWindow } = require('./src/windows/manager');
-const { createTray, setOverlayFunction: setTrayOverlayFunction } = require('./src/windows/tray');
+const { createTray, setOverlayFunction: setTrayOverlayFunction, setDeliveryFunction: setTrayDeliveryFunction } = require('./src/windows/tray');
 const { registerIpcHandlers, getStore } = require('./src/ipc/handlers');
-const { startCalendarPolling, stopCalendarPolling, setOverlayFunction: setCalendarOverlayFunction } = require('./src/services/calendar');
+const { startCalendarPolling, stopCalendarPolling, setDeliveryFunction: setCalendarDeliveryFunction } = require('./src/services/calendar');
 const { getPendingDeliveries, updateEventDoc } = require('./src/services/event');
 const { sendSlackDMToOrganizer } = require('./src/services/notification');
 
 const store = new Store({ encryptionKey: 'appreciate-secure-key-2024' });
 
+// Delivery queue to prevent overlapping overlays
+const deliveryQueue = [];
+let isDelivering = false;
+
 /**
  * Show gratitude overlay and mark as shown
+ * Returns a promise that resolves when the overlay is closed
  * @param {string} eventCode - Event code
  * @param {string} eventTitle - Event title
+ * @returns {Promise<void>}
  */
-async function showGratitudeOverlay(eventCode, eventTitle) {
-  const overlayWindow = createOverlayWindow();
+function showGratitudeOverlay(eventCode, eventTitle) {
+  return new Promise((resolve) => {
+    const overlayWindow = createOverlayWindow();
 
-  if (overlayWindow) {
-    overlayWindow.webContents.on('did-finish-load', async () => {
-      overlayWindow.webContents.send('show-gratitudes', { eventCode, eventTitle });
+    if (overlayWindow) {
+      overlayWindow.webContents.on('did-finish-load', async () => {
+        overlayWindow.webContents.send('show-gratitudes', { eventCode, eventTitle });
 
-      // Mark overlay as shown
-      await updateEventDoc(eventCode, { overlayShown: true });
-    });
-  }
+        // Mark overlay as shown
+        await updateEventDoc(eventCode, { overlayShown: true });
+      });
+
+      // Resolve when overlay is closed
+      overlayWindow.on('closed', () => {
+        console.log(`Overlay closed for: ${eventTitle}`);
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
 }
 
 /**
- * Deliver gratitudes to organizer
+ * Add event to delivery queue and process
  * @param {string} eventCode - Event code
  * @param {string} eventTitle - Event title
  * @param {string} organizerEmail - Organizer email
  */
-async function deliverGratitudes(eventCode, eventTitle, organizerEmail) {
-  console.log(`Delivering gratitudes for: ${eventTitle}`);
+function queueDelivery(eventCode, eventTitle, organizerEmail) {
+  deliveryQueue.push({ eventCode, eventTitle, organizerEmail });
+  console.log(`Queued delivery for: ${eventTitle} (queue size: ${deliveryQueue.length})`);
+  processDeliveryQueue();
+}
 
-  // Show overlay with gratitudes
+/**
+ * Process delivery queue one by one
+ */
+async function processDeliveryQueue() {
+  if (isDelivering || deliveryQueue.length === 0) {
+    return;
+  }
+
+  isDelivering = true;
+  const { eventCode, eventTitle, organizerEmail } = deliveryQueue.shift();
+
+  console.log(`Processing delivery for: ${eventTitle}`);
+
+  // Show overlay and wait for it to close
   await showGratitudeOverlay(eventCode, eventTitle);
 
   // Send Slack DM to organizer
@@ -55,10 +87,26 @@ async function deliverGratitudes(eventCode, eventTitle, organizerEmail) {
 
   // Mark as delivered
   await updateEventDoc(eventCode, { delivered: true });
+
+  isDelivering = false;
+
+  // Process next in queue
+  processDeliveryQueue();
+}
+
+/**
+ * Deliver gratitudes to organizer (adds to queue)
+ * @param {string} eventCode - Event code
+ * @param {string} eventTitle - Event title
+ * @param {string} organizerEmail - Organizer email
+ */
+function deliverGratitudes(eventCode, eventTitle, organizerEmail) {
+  queueDelivery(eventCode, eventTitle, organizerEmail);
 }
 
 /**
  * Check for pending deliveries on app startup
+ * Shows a notification 3 minutes after startup, then delivers 3 minutes later
  */
 async function checkPendingOverlays() {
   try {
@@ -77,24 +125,42 @@ async function checkPendingOverlays() {
 
     console.log(`Found ${pendingEvents.length} pending delivery(s)`);
 
-    for (let i = 0; i < pendingEvents.length; i++) {
-      const event = pendingEvents[i];
+    const THREE_MINUTES = 3 * 60 * 1000;
 
-      // Add delay between deliveries if multiple
-      if (i > 0) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      }
+    // Show notification after 3 minutes
+    setTimeout(() => {
+      console.log('Showing gratitude notification...');
 
-      await deliverGratitudes(event.id, event.title, event.organizerEmail);
-    }
+      const eventTitles = pendingEvents.map(e => e.title).join('、');
+      new Notification({
+        title: '感謝が届いています',
+        body: `「${eventTitles}」の感謝が3分後に届きます`
+      }).show();
+
+      // Deliver gratitudes after another 3 minutes
+      setTimeout(() => {
+        console.log('Delivering gratitudes...');
+
+        // Queue all events - they will be delivered one by one
+        for (const event of pendingEvents) {
+          console.log('Delivering event:', event.id, event.title, 'eventCode:', event.eventCode || event.id);
+          deliverGratitudes(event.eventCode || event.id, event.title, event.organizerEmail);
+        }
+      }, THREE_MINUTES);
+    }, THREE_MINUTES);
   } catch (error) {
     console.error('Error checking pending overlays:', error);
   }
 }
 
-// Set overlay function for tray and calendar
+// Set overlay function for tray
 setTrayOverlayFunction(showGratitudeOverlay);
-setCalendarOverlayFunction(showGratitudeOverlay);
+
+// Set delivery function for tray (for testing with Slack DM)
+setTrayDeliveryFunction(deliverGratitudes, () => store);
+
+// Set delivery function for calendar (uses queue system)
+setCalendarDeliveryFunction(deliverGratitudes);
 
 // App lifecycle
 app.whenReady().then(async () => {

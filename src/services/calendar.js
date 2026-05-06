@@ -19,21 +19,21 @@ const {
   Timestamp,
   serverTimestamp
 } = require('./event');
-const { sendSlackDMToAttendees, sendSlackDMToOrganizer } = require('./notification');
+const { sendSlackDMToAttendees } = require('./notification');
 
 const store = new Store({ encryptionKey: 'appreciate-secure-key-2024' });
 
 let pollingTimer = null;
 
-// Reference to overlay function (set from main process)
-let showGratitudeOverlayFn = null;
+// Reference to delivery function (set from main process)
+let deliveryFn = null;
 
 /**
- * Set the overlay display function
- * @param {Function} fn - Function to show gratitude overlay
+ * Set the delivery function (handles queue, overlay, Slack DM, and marking delivered)
+ * @param {Function} fn - Function to deliver gratitudes (eventCode, eventTitle, organizerEmail)
  */
-function setOverlayFunction(fn) {
-  showGratitudeOverlayFn = fn;
+function setDeliveryFunction(fn) {
+  deliveryFn = fn;
 }
 
 /**
@@ -209,31 +209,25 @@ async function endGratitudeCollection(eventCode, eventTitle) {
 }
 
 /**
- * Deliver gratitudes to organizer
+ * Deliver gratitudes to organizer (queues the delivery)
  * @param {string} eventCode - Event code
  * @param {string} eventTitle - Event title
  */
-async function deliverGratitudes(eventCode, eventTitle) {
-  console.log(`Delivering gratitudes for: ${eventTitle}`);
+function deliverGratitudes(eventCode, eventTitle) {
+  console.log(`Scheduling delivery for: ${eventTitle}`);
 
-  // Show overlay with gratitudes
-  if (showGratitudeOverlayFn) {
-    showGratitudeOverlayFn(eventCode, eventTitle);
-  }
-
-  // Also send Slack DM to organizer
   const trackedEvent = getTrackedEventByCode(eventCode);
-  if (trackedEvent && trackedEvent.data.organizerEmail) {
-    await sendSlackDMToOrganizer(trackedEvent.data.organizerEmail, eventCode, eventTitle);
-  }
+  const organizerEmail = trackedEvent?.data?.organizerEmail || null;
 
-  // Mark as delivered
-  await updateEventDoc(eventCode, { delivered: true });
+  // Use the delivery function (handles queue, overlay, Slack DM, and marking delivered)
+  if (deliveryFn) {
+    deliveryFn(eventCode, eventTitle, organizerEmail);
+  }
 }
 
 module.exports = {
   startCalendarPolling,
   stopCalendarPolling,
-  setOverlayFunction,
+  setDeliveryFunction,
   deliverGratitudes
 };

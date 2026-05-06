@@ -7,6 +7,10 @@ const { doc, setDoc, getDoc, getDocs, query, where, collection, serverTimestamp,
 const { getDb } = require('../config/firebase');
 const { EVENT_CODE_CHARS, EVENT_CODE_MIN_LENGTH, EVENT_CODE_MAX_LENGTH } = require('../config/constants');
 
+// TEST MODE: Set to true to deliver gratitudes 4 minutes after event end
+const TEST_MODE = false;
+const TEST_DELIVERY_MINUTES = 4;
+
 // Tracked events in memory
 const trackedEvents = new Map();
 
@@ -105,18 +109,27 @@ async function getEventByCode(eventCode) {
 
 /**
  * Calculate deadline (next day 9:59) and delivery time (next day 10:00)
+ * In TEST_MODE: deadline is 3 minutes after event end, delivery is 4 minutes after
  * @param {Date} eventEndTime - Event end time
  * @returns {Object} { deadline, deliveryTime }
  */
 function calculateDeadlineAndDeliveryTime(eventEndTime) {
   const endDate = new Date(eventEndTime);
 
-  // Next day 9:59:59
+  // TEST MODE: Deliver 4 minutes after event end
+  if (TEST_MODE) {
+    const deadline = new Date(endDate.getTime() + (TEST_DELIVERY_MINUTES - 1) * 60 * 1000);
+    const deliveryTime = new Date(endDate.getTime() + TEST_DELIVERY_MINUTES * 60 * 1000);
+    console.log(`[TEST MODE] Deadline: ${deadline.toLocaleTimeString()}, Delivery: ${deliveryTime.toLocaleTimeString()}`);
+    return { deadline, deliveryTime };
+  }
+
+  // PRODUCTION: Next day 9:59:59
   const deadline = new Date(endDate);
   deadline.setDate(deadline.getDate() + 1);
   deadline.setHours(9, 59, 59, 999);
 
-  // Next day 10:00:00
+  // PRODUCTION: Next day 10:00:00
   const deliveryTime = new Date(endDate);
   deliveryTime.setDate(deliveryTime.getDate() + 1);
   deliveryTime.setHours(10, 0, 0, 0);

@@ -14,12 +14,28 @@ let tray = null;
 // Reference to overlay function (set from main process)
 let showGratitudeOverlayFn = null;
 
+// Reference to delivery function (set from main process)
+let deliverGratitudesFn = null;
+
+// Reference to store for getting user email
+let storeFn = null;
+
 /**
  * Set the overlay display function for test
  * @param {Function} fn - Function to show gratitude overlay
  */
 function setOverlayFunction(fn) {
   showGratitudeOverlayFn = fn;
+}
+
+/**
+ * Set the delivery function for test (includes Slack DM to organizer)
+ * @param {Function} fn - Function to deliver gratitudes
+ * @param {Function} getStore - Function to get electron store
+ */
+function setDeliveryFunction(fn, getStore) {
+  deliverGratitudesFn = fn;
+  storeFn = getStore;
 }
 
 /**
@@ -64,6 +80,18 @@ function createTray() {
         }
       }
     },
+    {
+      label: '📬 主催者配信テスト (Slack DM込み)',
+      click: () => {
+        if (deliverGratitudesFn && storeFn) {
+          const store = storeFn();
+          const user = store.get('user');
+          const organizerEmail = user?.email || '';
+          console.log(`Test delivery to organizer: ${organizerEmail}`);
+          deliverGratitudesFn('TEST001', 'テストイベント', organizerEmail);
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: '終了',
@@ -88,5 +116,6 @@ function getTray() {
 module.exports = {
   createTray,
   getTray,
-  setOverlayFunction
+  setOverlayFunction,
+  setDeliveryFunction
 };

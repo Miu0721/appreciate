@@ -40,30 +40,30 @@
       backdrop-filter: blur(20px);
       border-radius: 16px;
       padding: 14px 16px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      box-shadow: none;
       border: 1px solid rgba(255, 255, 255, 0.15);
       pointer-events: auto;
       opacity: 0;
-      transform: translateY(20px) scale(0.95);
-      animation: streamUp 30s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+      transform: translateY(calc(20px + var(--start-offset, 0px))) scale(0.95);
+      animation: streamUp 12s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
     }
 
     @keyframes streamUp {
       0% {
         opacity: 0;
-        transform: translateY(20px) scale(0.95);
+        transform: translateY(calc(20px + var(--start-offset, 0px))) scale(0.95);
       }
-      2% {
+      3% {
         opacity: 1;
-        transform: translateY(0) scale(1);
+        transform: translateY(var(--start-offset, 0px)) scale(1);
       }
-      90% {
+      85% {
         opacity: 1;
-        transform: translateY(-500px) scale(1);
+        transform: translateY(calc(-450px + var(--start-offset, 0px))) scale(1);
       }
       100% {
         opacity: 0;
-        transform: translateY(-550px) scale(0.95);
+        transform: translateY(calc(-500px + var(--start-offset, 0px))) scale(0.95);
       }
     }
 
@@ -290,7 +290,11 @@
     let totalCount = 0;
     let totalEmojis = 0;
     let activeParticles = 0;
+    let activeCards = 0;
     const MAX_PARTICLES = 100; // 同時パーティクル上限
+    const MAX_CARDS = 4; // 同時カード上限
+    const CARD_INTERVAL = 2000; // カード表示間隔（2秒）
+    const CARD_HEIGHT = 120; // カードの高さ（px）
 
     closeBtn.addEventListener('click', () => {
       window.electronAPI.closeOverlay();
@@ -362,6 +366,13 @@
 
     // カード表示
     function displayGratitude(gratitude) {
+      // 同時表示カード数を制限
+      if (activeCards >= MAX_CARDS) {
+        console.log('MAX_CARDS reached, waiting...');
+        return false;
+      }
+
+      activeCards++;
       const card = document.createElement('div');
       card.className = 'gratitude-card';
 
@@ -385,11 +396,18 @@
         ${message ? `<p class="gratitude-message">${message}</p>` : ''}
       `;
 
-      const existingCards = gratitudeArea.children.length;
-      card.style.bottom = (existingCards * 40) + 'px';
+      // 各カードの開始位置をずらす（重ならないように）
+      const cardIndex = activeCards - 1;
+      card.style.setProperty('--start-offset', `${cardIndex * CARD_HEIGHT}px`);
       gratitudeArea.appendChild(card);
 
-      setTimeout(() => card.parentNode && card.remove(), 30000);
+      // アニメーション終了時にカードを削除
+      setTimeout(() => {
+        if (card.parentNode) {
+          card.remove();
+          activeCards--;
+        }
+      }, 12000);
 
       // パーティクル（実際の数×3を緩めの間隔で表示）
       const multipliedEmojis = [];
@@ -400,7 +418,7 @@
       });
 
       console.log('Creating particles:', multipliedEmojis.length, 'from', emojis.length, 'emojis');
-      const interval = 300; // 300ms間隔で統一
+      const interval = 150; // 150ms間隔で統一
       multipliedEmojis.forEach((emoji, i) => {
         setTimeout(() => createEmojiParticle(emoji), i * interval);
       });
@@ -408,18 +426,46 @@
       totalCount++;
       totalEmojis += emojis.length;
       gratitudeCountEl.textContent = `${totalCount}件 / ${totalEmojis}絵文字`;
+
+      return true;
     }
 
     function streamGratitudes() {
       if (currentIndex < gratitudes.length) {
-        displayGratitude(gratitudes[currentIndex]);
-        currentIndex++;
-        setTimeout(streamGratitudes, 2000); // 2秒間隔
+        const result = displayGratitude(gratitudes[currentIndex]);
+        if (result !== false) {
+          currentIndex++;
+        }
+        // 常に均一の間隔で表示
+        setTimeout(streamGratitudes, CARD_INTERVAL);
       }
     }
 
     // 表示済みIDを追跡
     const displayedIds = new Set();
+    // リアルタイム用の待機キュー
+    const realtimeQueue = [];
+    let isProcessingRealtime = false;
+
+    // リアルタイムキューを処理
+    function processRealtimeQueue() {
+      if (isProcessingRealtime || realtimeQueue.length === 0) return;
+
+      isProcessingRealtime = true;
+      const gratitude = realtimeQueue[0];
+      const result = displayGratitude(gratitude);
+
+      if (result !== false) {
+        realtimeQueue.shift();
+        console.log('Realtime gratitude displayed:', gratitude.id);
+      }
+
+      // 次のキューを処理（常に均一の間隔）
+      setTimeout(() => {
+        isProcessingRealtime = false;
+        processRealtimeQueue();
+      }, CARD_INTERVAL);
+    }
 
     // Firestoreから初期データ取得
     async function fetchGratitudes(code) {
@@ -444,11 +490,12 @@
           if (change.type === 'added') {
             const gratitude = { id: change.doc.id, ...change.doc.data() };
 
-            // 未表示の新しい感謝のみ表示
+            // 未表示の新しい感謝のみキューに追加
             if (!displayedIds.has(gratitude.id)) {
               displayedIds.add(gratitude.id);
-              displayGratitude(gratitude);
-              console.log('New gratitude received:', gratitude.id);
+              realtimeQueue.push(gratitude);
+              console.log('New gratitude queued:', gratitude.id);
+              processRealtimeQueue();
             }
           }
         });
@@ -459,12 +506,14 @@
 
     // メイン処理
     window.electronAPI.onShowGratitudes(async (data) => {
+      console.log('onShowGratitudes called with:', data);
       eventCode = data.eventCode;
       eventTitleEl.textContent = data.eventTitle;
 
       // 初期データ取得
+      console.log('Fetching gratitudes for eventCode:', eventCode);
       gratitudes = await fetchGratitudes(eventCode);
-      console.log(`Loaded ${gratitudes.length} gratitudes`);
+      console.log(`Loaded ${gratitudes.length} gratitudes`, gratitudes);
 
       if (gratitudes.length === 0) {
         // データがない場合は待機メッセージを表示
